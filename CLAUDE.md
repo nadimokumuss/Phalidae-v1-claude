@@ -12,6 +12,9 @@ Phalidae is a self-learning crypto futures trading bot targeting Binance USDM Pe
 # Install dependencies
 pip install -r requirements.txt
 
+# Enable pre-commit hook (protects patterns.py & levels.py)
+git config core.hooksPath .hooks
+
 # Start the trading system (creates DB + seeds 300 strategies on first run)
 streamlit run scripts/app.py
 ```
@@ -159,7 +162,12 @@ Seven specialized agents are available in `.claude/agents/`:
 
 A pre-commit hook guards `scripts/patterns.py` and `scripts/levels.py` from accidental modification. If a commit includes changes to either file, the commit is rejected with an error message.
 
-**Hook location:** `.claude/settings.json` → hooks configuration
+**Hook file:** `.hooks/pre-commit` (git-tracked, shared across team)
+
+**Setup (one-time per clone):**
+```bash
+git config core.hooksPath .hooks
+```
 
 **Protected files:**
 - `scripts/patterns.py` — 60 candlestick pattern functions

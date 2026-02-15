@@ -1,0 +1,23 @@
+#!/bin/bash
+# Pre-commit hook: Protect immutable files (patterns.py, levels.py)
+# These files are stable, fully tested, and must NOT be modified.
+#
+# Install: git config core.hooksPath .hooks
+
+PROTECTED_FILES="scripts/patterns.py scripts/levels.py"
+
+for file in $PROTECTED_FILES; do
+    if git diff --cached --name-only | grep -qx "$file"; then
+        echo ""
+        echo "ERROR: Commit rejected."
+        echo "  '$file' is an immutable file and must NOT be modified."
+        echo ""
+        echo "  patterns.py: 60 candlestick pattern functions (stable)"
+        echo "  levels.py:   12 S/R detection methods (stable)"
+        echo ""
+        echo "  If you absolutely need to modify this file,"
+        echo "  use: git commit --no-verify"
+        echo ""
+        exit 1
+    fi
+done
