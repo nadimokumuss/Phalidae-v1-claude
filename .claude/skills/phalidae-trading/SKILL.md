@@ -24,7 +24,8 @@ On first run: DB is created, 300 seed strategies are generated, and 6 background
 
 ```
 phalidae-trading/
-├── SKILL.md                        # This file - skill definition
+├── .claude/skills/phalidae-trading/
+│   └── SKILL.md                    # This file - skill definition
 ├── requirements.txt                # Dependencies
 ├── scripts/
 │   ├── app.py                      # Streamlit entry point, DB init, scheduler
