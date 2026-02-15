@@ -7,7 +7,7 @@ import os
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, Session
 
-_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "phalidae.db")
+_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "phalidae.db")
 _ENGINE = None
 _SESSION_FACTORY = None
 

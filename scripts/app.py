@@ -3,6 +3,12 @@ Phalidae v2 - Self-Learning Crypto Trading Bot
 Entry point: DB init + Scheduler start + Streamlit multi-page navigation.
 """
 
+import sys
+import os
+
+# Ensure scripts/ is on sys.path so internal imports (db.*, worker.*, etc.) resolve correctly
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import logging
 import streamlit as st
 
