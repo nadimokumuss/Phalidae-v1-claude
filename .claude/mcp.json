@@ -1,3 +1,13 @@
 {
-  "mcpServers": {}
+  "mcpServers": {
+    "sqlite": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@anthropic/mcp-sqlite",
+        "--db-path",
+        "./phalidae.db"
+      ]
+    }
+  }
 }

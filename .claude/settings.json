@@ -3,16 +3,30 @@
     "allow": [
       "Bash(streamlit run:*)",
       "Bash(pip install:*)",
+      "Bash(pip list:*)",
       "Bash(python -c:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(pytest:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git status:*)",
       "Bash(git diff:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(git branch:*)",
+      "Bash(git checkout:*)",
+      "Bash(git merge:*)",
+      "Bash(git stash:*)",
+      "Bash(git show:*)",
+      "Bash(git rev-parse:*)"
     ],
     "deny": [
       "Bash(rm -rf:*)",
-      "Bash(git push --force:*)"
+      "Bash(git push --force:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean -f:*)",
+      "Bash(git branch -D:*)",
+      "Bash(drop table:*)",
+      "Bash(truncate:*)"
     ]
   }
 }

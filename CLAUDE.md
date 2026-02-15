@@ -34,12 +34,12 @@ Phalidae-v1-master/
 ├── .claude/
 │   ├── settings.json                   # Shared project permissions (in git)
 │   ├── settings.local.json             # Local overrides (gitignored)
-│   ├── mcp.json                        # MCP server config (placeholder)
-│   ├── agents/
+│   ├── mcp.json                        # MCP: SQLite server → phalidae.db
+│   ├── agents/                         # 7 specialized sub-agents
 │   │   ├── backtest-analyst.md         # Backtest quality & overfitting analysis (read-only)
 │   │   ├── bug-debugger.md             # Scheduler, data pipeline & concurrency debugging
 │   │   ├── code-reviewer.md            # Code review for trading logic & project rules (read-only)
-│   │   ├── db-manager.md               # Schema changes, data integrity, query optimization
+│   │   ├── db-manager.md              # Schema changes, data integrity, query optimization
 │   │   ├── indicator-developer.md      # End-to-end indicator addition pipeline
 │   │   ├── page-builder.md             # Streamlit page creation with conventions
 │   │   └── strategy-researcher.md      # Strategy performance research (read-only)
@@ -89,22 +89,38 @@ Phalidae-v1-master/
 - **`scripts/patterns.py`** — 60 candlestick patterns. Stable and tested. **DO NOT MODIFY.**
 - **`scripts/levels.py`** — 12 S/R methods + chart patterns. Stable and tested. **DO NOT MODIFY.**
 
+These files are protected by a pre-commit hook (see [Hooks](#hooks) section). Any commit touching them will be rejected.
+
 ### Development Workflows
 
 **Adding a new indicator:**
 1. Add calculation to `scripts/indicators.py` → `compute_all_indicators()`
 2. Add scoring criterion to `scripts/indicators.py` → `score_all_indicators()`
 3. Register in `scripts/strategy/catalog.py` under the appropriate category
+4. Use the `indicator-developer` agent for guided implementation
 
 **Adding a new page:**
 1. Create `scripts/pages/page_xxx.py` with a `render()` function
 2. Add to the radio list in `scripts/app.py`
 3. Import and call `render()` in the page routing block
+4. Use the `page-builder` agent for convention-compliant pages
 
 **Changing DB schema:**
 1. Update `scripts/db/models.py`
 2. Delete `phalidae.db` at project root
 3. Restart the application (tables are auto-created)
+4. Use the `db-manager` agent for safe schema migrations
+
+**Debugging issues:**
+1. Use the `bug-debugger` agent for scheduler, data pipeline, and concurrency problems
+2. Check `references/technical-reference.md` for function signatures and job intervals
+
+**Reviewing code changes:**
+1. Use the `code-reviewer` agent before merging — validates trading logic and project rules
+2. Use the `backtest-analyst` agent to validate strategy performance claims
+
+**Researching strategies:**
+1. Use the `strategy-researcher` agent to analyze performance data and suggest improvements
 
 ### Exchange Constraint
 - Only `ccxt.binanceusdm` (Binance USDM Perpetual Futures) is supported.
@@ -120,6 +136,48 @@ Phalidae-v1-master/
 | Warmup bars | 200 | backtester.py |
 | Min trades for scoring | 20 | optimizer.py |
 | Timeframes | 15m, 1h, 4h, 1d | collector.py |
+
+## Sub-Agents
+
+Seven specialized agents are available in `.claude/agents/`:
+
+| Agent | Access Level | When to Use |
+|-------|-------------|-------------|
+| `backtest-analyst` | Read-only | Validating backtest results, detecting overfitting, checking statistical significance |
+| `bug-debugger` | Read & Write | Diagnosing scheduler failures, data gaps, SQLite locking, signal NaN errors |
+| `code-reviewer` | Read-only | Pre-merge review of trading logic, project rule compliance, Python best practices |
+| `db-manager` | Read & Write | Adding tables/columns, fixing data integrity issues, optimizing slow queries |
+| `indicator-developer` | Read & Write | Adding new indicators (3-step pipeline: compute → score → catalog) |
+| `page-builder` | Read & Write | Creating new Streamlit pages with correct conventions and routing |
+| `strategy-researcher` | Read-only | Analyzing strategy performance, comparing regime-specific scores, suggesting combinations |
+
+**Least Privilege**: Read-only agents (backtest-analyst, code-reviewer, strategy-researcher) cannot modify files — they analyze and report only.
+
+## Hooks
+
+### Pre-commit: Immutable File Protection
+
+A pre-commit hook guards `scripts/patterns.py` and `scripts/levels.py` from accidental modification. If a commit includes changes to either file, the commit is rejected with an error message.
+
+**Hook location:** `.claude/settings.json` → hooks configuration
+
+**Protected files:**
+- `scripts/patterns.py` — 60 candlestick pattern functions
+- `scripts/levels.py` — 12 S/R detection methods + chart patterns
+
+**Bypass:** Only with explicit user approval and `--no-verify` flag (discouraged).
+
+## MCP Servers
+
+### SQLite (phalidae.db)
+
+Configured in `.claude/mcp.json`. Provides direct SQL access to the runtime database for:
+- Querying `strategy_performance` to find top strategies per symbol
+- Inspecting `paper_trades` history and P&L distribution
+- Checking `ohlcv_data` coverage and gaps
+- Analyzing `signals` with their `score_breakdown` JSON
+
+**Prerequisite:** `npx` must be available (Node.js installed). The DB file is created after first `streamlit run`.
 
 ## Technical Reference
 

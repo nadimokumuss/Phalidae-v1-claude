@@ -27,5 +27,12 @@ venv/
 .DS_Store
 Thumbs.db
 
+# Logs
+logs/
+*.log
+
+# PDF documents
+*.pdf
+
 # Claude (only local settings are ignored)
 .claude/settings.local.json
