@@ -1,0 +1,341 @@
+"""
+Phalidae v2 - Strategy Lab Page
+Per-coin strategy rankings, variant details, comparison, global leaderboard.
+Includes: regime-based performance breakdown, correlation matrix, regime filters.
+"""
+
+import json
+import streamlit as st
+import pandas as pd
+import numpy as np
+
+from db.engine import get_session
+from db.models import (
+    TrackedSymbol, StrategyVariant, StrategyPerformance, CoinConfig,
+    CorrelationCache,
+)
+from strategy.optimizer import get_top_strategies
+from sqlalchemy import func
+
+
+def render():
+    st.title("Strategy Lab")
+    st.caption("Coin bazli strateji siralamasi ve karsilastirma")
+
+    tab_coin, tab_global, tab_detail, tab_corr = st.tabs([
+        "Coin Bazli", "Global Leaderboard", "Varyant Detayi", "Korelasyon"
+    ])
+
+    with tab_coin:
+        _render_coin_strategies()
+    with tab_global:
+        _render_global_leaderboard()
+    with tab_detail:
+        _render_variant_detail()
+    with tab_corr:
+        _render_correlation_matrix()
+
+
+def _render_coin_strategies():
+    """Show strategy rankings for a selected coin with regime breakdown."""
+    session = get_session()
+    try:
+        symbols = (
+            session.query(TrackedSymbol)
+            .filter_by(is_active=True)
+            .order_by(TrackedSymbol.rank)
+            .all()
+        )
+    finally:
+        session.close()
+
+    if not symbols:
+        st.info("Henuz takip edilen coin yok.")
+        return
+
+    sym_list = [s.symbol for s in symbols]
+    sym_labels = [s.symbol.replace("/USDT:USDT", "") for s in symbols]
+
+    sel_idx = st.selectbox("Coin sec:", range(len(sym_list)), format_func=lambda i: sym_labels[i])
+    selected_sym = sym_list[sel_idx]
+
+    # Regime filter
+    regime_filter = st.radio(
+        "Filtre:",
+        ["Genel", "Trend Rejimi", "Yatay Rejim", "Volatil Rejim"],
+        horizontal=True,
+    )
+
+    strategies = get_top_strategies(selected_sym, limit=20)
+
+    if not strategies:
+        st.info(f"{sym_labels[sel_idx]} icin henuz backtest sonucu yok.")
+        return
+
+    st.subheader(f"Top {len(strategies)} Strateji: {sym_labels[sel_idx]}")
+
+    rows = []
+    for s in strategies:
+        comp = s["composition"]
+        trend_str = ", ".join(comp.get("trend", []))
+        entry_str = ", ".join(comp.get("entry", []))
+        vol_str = ", ".join(comp.get("volume", []))
+
+        row = {
+            "Rank": s["rank"],
+            "Skor": f"{s['composite_score']:.4f}",
+            "Win Rate": f"{s['win_rate'] * 100:.1f}%",
+            "PF": f"{s['profit_factor']:.2f}",
+            "Sharpe": f"{s['sharpe_ratio']:.2f}",
+            "Max DD": f"{s['max_drawdown']:.1f}%",
+            "P&L": f"{s['total_pnl_pct']:+.1f}%",
+            "Trade #": s["total_trades"],
+            "Trend": trend_str[:30],
+            "Entry": entry_str[:25],
+            "Volume": vol_str[:15],
+        }
+
+        # Add regime scores
+        row["Trend WR"] = f"{s.get('regime_trending_score', 0) * 100:.0f}%" if s.get("regime_trending_score") else "-"
+        row["Yatay WR"] = f"{s.get('regime_ranging_score', 0) * 100:.0f}%" if s.get("regime_ranging_score") else "-"
+        row["Volatil WR"] = f"{s.get('regime_volatile_score', 0) * 100:.0f}%" if s.get("regime_volatile_score") else "-"
+
+        rows.append(row)
+
+    st.dataframe(pd.DataFrame(rows), width="stretch", height=500)
+
+    # Top 5 comparison chart
+    if len(strategies) >= 2:
+        st.subheader("Top 5 Karsilastirma")
+        import plotly.graph_objects as go
+
+        top5 = strategies[:5]
+        names = [f"#{s['rank']}" for s in top5]
+
+        fig = go.Figure()
+        metrics = ["win_rate", "profit_factor", "sharpe_ratio"]
+        labels = ["Win Rate", "Profit Factor", "Sharpe"]
+        colors = ["#26a69a", "#ff9800", "#2196f3"]
+
+        for metric, label, color in zip(metrics, labels, colors):
+            values = []
+            for s in top5:
+                val = s[metric]
+                if metric == "win_rate":
+                    val *= 100
+                values.append(val)
+            fig.add_trace(go.Bar(name=label, x=names, y=values, marker_color=color))
+
+        fig.update_layout(
+            barmode="group",
+            template="plotly_dark",
+            height=400,
+            title="Top 5 Strateji Metrikleri",
+        )
+        st.plotly_chart(fig, width="stretch")
+
+
+def _render_global_leaderboard():
+    """Global strategy ranking across all coins."""
+    session = get_session()
+    try:
+        results = (
+            session.query(
+                StrategyVariant.id,
+                StrategyVariant.name,
+                StrategyVariant.composition,
+                func.avg(StrategyPerformance.composite_score).label("avg_score"),
+                func.avg(StrategyPerformance.win_rate).label("avg_wr"),
+                func.avg(StrategyPerformance.profit_factor).label("avg_pf"),
+                func.sum(StrategyPerformance.total_trades).label("total_trades"),
+                func.count(StrategyPerformance.symbol).label("coin_count"),
+                func.avg(StrategyPerformance.regime_trending_score).label("avg_trend_wr"),
+                func.avg(StrategyPerformance.regime_ranging_score).label("avg_range_wr"),
+                func.avg(StrategyPerformance.regime_volatile_score).label("avg_vol_wr"),
+            )
+            .join(StrategyPerformance, StrategyVariant.id == StrategyPerformance.strategy_variant_id)
+            .filter(StrategyPerformance.composite_score > 0)
+            .group_by(StrategyVariant.id)
+            .having(func.count(StrategyPerformance.symbol) >= 3)  # Min 3 coins tested
+            .order_by(func.avg(StrategyPerformance.composite_score).desc())
+            .limit(50)
+            .all()
+        )
+    finally:
+        session.close()
+
+    if not results:
+        st.info("Henuz yeterli backtest verisi yok. En az 3 coin'de test edilmis strateji gerekli.")
+        return
+
+    rows = []
+    for r in results:
+        try:
+            comp = json.loads(r.composition)
+            trend_str = ", ".join(comp.get("trend", []))
+        except (json.JSONDecodeError, TypeError):
+            trend_str = "?"
+
+        rows.append({
+            "ID": r.id,
+            "Strateji": r.name[:35] if r.name else "?",
+            "Ort. Skor": f"{r.avg_score:.4f}",
+            "Ort. WR": f"{r.avg_wr * 100:.1f}%",
+            "Ort. PF": f"{r.avg_pf:.2f}",
+            "Toplam Trade": int(r.total_trades),
+            "Coin Sayisi": int(r.coin_count),
+            "Trend WR": f"{r.avg_trend_wr * 100:.0f}%" if r.avg_trend_wr else "-",
+            "Yatay WR": f"{r.avg_range_wr * 100:.0f}%" if r.avg_range_wr else "-",
+            "Volatil WR": f"{r.avg_vol_wr * 100:.0f}%" if r.avg_vol_wr else "-",
+            "Trend": trend_str[:30],
+        })
+
+    st.subheader(f"Global Top {len(rows)} Strateji")
+    st.dataframe(pd.DataFrame(rows), width="stretch", height=600)
+
+
+def _render_variant_detail():
+    """Detailed view of a specific strategy variant with regime breakdown."""
+    session = get_session()
+    try:
+        variants = session.query(StrategyVariant).order_by(StrategyVariant.id).limit(200).all()
+        variant_data = [
+            {"id": v.id, "name": v.name, "composition": v.composition,
+             "trend_threshold": v.trend_threshold, "entry_threshold": v.entry_threshold,
+             "volume_required": v.volume_required}
+            for v in variants
+        ]
+    finally:
+        session.close()
+
+    if not variant_data:
+        st.info("Henuz strateji varyanti yok.")
+        return
+
+    sel = st.selectbox(
+        "Varyant sec:",
+        range(len(variant_data)),
+        format_func=lambda i: f"#{variant_data[i]['id']} - {variant_data[i]['name'][:50]}",
+    )
+    v = variant_data[sel]
+
+    st.subheader(f"Varyant #{v['id']}: {v['name']}")
+
+    try:
+        comp = json.loads(v["composition"])
+    except (json.JSONDecodeError, TypeError):
+        comp = {}
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(f"**Trend:** {', '.join(comp.get('trend', []))}")
+    c2.markdown(f"**Entry:** {', '.join(comp.get('entry', []))}")
+    c3.markdown(f"**Volume:** {', '.join(comp.get('volume', []))}")
+    c4.markdown(f"**Volatility:** {', '.join(comp.get('volatility', []))}")
+
+    st.write(f"Trend threshold: {v['trend_threshold']}, Entry threshold: {v['entry_threshold']}, Volume required: {v['volume_required']}")
+
+    # Performance across coins with regime breakdown
+    session = get_session()
+    try:
+        perfs = (
+            session.query(StrategyPerformance)
+            .filter_by(strategy_variant_id=v["id"])
+            .filter(StrategyPerformance.total_trades > 0)
+            .order_by(StrategyPerformance.composite_score.desc())
+            .all()
+        )
+    finally:
+        session.close()
+
+    if perfs:
+        rows = []
+        for p in perfs:
+            rows.append({
+                "Coin": p.symbol.replace("/USDT:USDT", ""),
+                "Rank": p.rank,
+                "Skor": f"{p.composite_score:.4f}",
+                "WR": f"{p.win_rate * 100:.1f}%",
+                "PF": f"{p.profit_factor:.2f}",
+                "Sharpe": f"{p.sharpe_ratio:.2f}",
+                "Max DD": f"{p.max_drawdown:.1f}%",
+                "P&L": f"{p.total_pnl_pct:+.1f}%",
+                "Trade": p.total_trades,
+                "Trend WR": f"{p.regime_trending_score * 100:.0f}%" if p.regime_trending_score else "-",
+                "Yatay WR": f"{p.regime_ranging_score * 100:.0f}%" if p.regime_ranging_score else "-",
+                "Volatil WR": f"{p.regime_volatile_score * 100:.0f}%" if p.regime_volatile_score else "-",
+                "Paper WR": f"{p.paper_win_rate * 100:.1f}%" if p.paper_total > 0 else "-",
+            })
+        st.dataframe(pd.DataFrame(rows), width="stretch")
+    else:
+        st.info("Bu varyant icin henuz backtest sonucu yok.")
+
+
+def _render_correlation_matrix():
+    """Show pairwise correlation heatmap between symbols."""
+    session = get_session()
+    try:
+        correlations = session.query(CorrelationCache).all()
+    finally:
+        session.close()
+
+    if not correlations:
+        st.info("Korelasyon verisi henuz hesaplanmadi. Optimizer ilk calistiginda gorunecek.")
+        return
+
+    st.subheader("Coin Korelasyon Matrisi")
+    st.caption("4h close getiri korelasyonu. >0.7 olan ciftlere ayni anda trade acilmaz.")
+
+    # Build correlation matrix
+    symbols = set()
+    for c in correlations:
+        symbols.add(c.symbol_a)
+        symbols.add(c.symbol_b)
+
+    symbols = sorted(symbols)
+    clean_symbols = [s.replace("/USDT:USDT", "") for s in symbols]
+    n = len(symbols)
+
+    matrix = np.eye(n)
+    sym_idx = {s: i for i, s in enumerate(symbols)}
+
+    for c in correlations:
+        i = sym_idx.get(c.symbol_a)
+        j = sym_idx.get(c.symbol_b)
+        if i is not None and j is not None:
+            matrix[i, j] = c.correlation
+            matrix[j, i] = c.correlation
+
+    # Plotly heatmap
+    import plotly.graph_objects as go
+
+    fig = go.Figure(data=go.Heatmap(
+        z=matrix,
+        x=clean_symbols,
+        y=clean_symbols,
+        colorscale="RdYlGn_r",
+        zmid=0,
+        zmin=-1,
+        zmax=1,
+        text=np.round(matrix, 2),
+        texttemplate="%{text}",
+        textfont={"size": 9},
+    ))
+
+    fig.update_layout(
+        template="plotly_dark",
+        height=max(400, n * 25),
+        title="Korelasyon Matrisi (4h Close Returns)",
+        xaxis_title="",
+        yaxis_title="",
+    )
+
+    st.plotly_chart(fig, width="stretch")
+
+    # High correlation pairs warning
+    high_corr = [c for c in correlations if abs(c.correlation) > 0.7]
+    if high_corr:
+        st.warning(f"{len(high_corr)} yuksek korelasyonlu cift (>0.7) - bu ciftlere ayni anda trade acilmaz:")
+        for c in sorted(high_corr, key=lambda x: abs(x.correlation), reverse=True)[:10]:
+            a = c.symbol_a.replace("/USDT:USDT", "")
+            b = c.symbol_b.replace("/USDT:USDT", "")
+            st.caption(f"  {a} <-> {b}: {c.correlation:.3f}")
