@@ -36,8 +36,13 @@ Phalidae-v1-master/
 │   ├── settings.local.json             # Local overrides (gitignored)
 │   ├── mcp.json                        # MCP server config (placeholder)
 │   ├── agents/
-│   │   ├── code-reviewer.md            # Code review sub-agent (read-only)
-│   │   └── strategy-researcher.md      # Strategy research sub-agent (read-only)
+│   │   ├── backtest-analyst.md         # Backtest quality & overfitting analysis (read-only)
+│   │   ├── bug-debugger.md             # Scheduler, data pipeline & concurrency debugging
+│   │   ├── code-reviewer.md            # Code review for trading logic & project rules (read-only)
+│   │   ├── db-manager.md               # Schema changes, data integrity, query optimization
+│   │   ├── indicator-developer.md      # End-to-end indicator addition pipeline
+│   │   ├── page-builder.md             # Streamlit page creation with conventions
+│   │   └── strategy-researcher.md      # Strategy performance research (read-only)
 │   └── skills/
 │       └── phalidae-trading/
 │           └── SKILL.md                # Skill definition with YAML frontmatter
