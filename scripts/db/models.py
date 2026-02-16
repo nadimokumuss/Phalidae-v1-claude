@@ -6,7 +6,7 @@ Updated columns on: PaperTrade, Signal, CoinConfig, StrategyPerformance
 
 from datetime import datetime
 from sqlalchemy import (
-    Column, Integer, Float, String, Boolean, DateTime, Text,
+    Column, Integer, Float, String, Boolean, DateTime, Text, JSON,
     ForeignKey, UniqueConstraint, Index,
 )
 from sqlalchemy.orm import declarative_base, relationship
@@ -17,7 +17,7 @@ Base = declarative_base()
 class OHLCVData(Base):
     __tablename__ = "ohlcv_data"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(Integer, primary_key=True)
     symbol = Column(String(30), nullable=False, index=True)
     timeframe = Column(String(5), nullable=False, index=True)
     timestamp = Column(DateTime, nullable=False, index=True)
@@ -35,7 +35,7 @@ class OHLCVData(Base):
 class TrackedSymbol(Base):
     __tablename__ = "tracked_symbols"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(Integer, primary_key=True)
     symbol = Column(String(30), unique=True, nullable=False)
     rank = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
@@ -46,9 +46,9 @@ class TrackedSymbol(Base):
 class StrategyVariant(Base):
     __tablename__ = "strategy_variants"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(Integer, primary_key=True)
     name = Column(String(100), nullable=False)
-    composition = Column(Text, nullable=False)  # JSON
+    composition = Column(JSON, nullable=False)
     trend_threshold = Column(Float, default=0.3)
     entry_threshold = Column(Float, default=0.3)
     volume_required = Column(Boolean, default=True)
@@ -60,7 +60,7 @@ class StrategyVariant(Base):
 class StrategyPerformance(Base):
     __tablename__ = "strategy_performance"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(Integer, primary_key=True)
     strategy_variant_id = Column(Integer, ForeignKey("strategy_variants.id"), nullable=False)
     symbol = Column(String(30), nullable=False, index=True)
 
@@ -100,7 +100,7 @@ class StrategyPerformance(Base):
 class Signal(Base):
     __tablename__ = "signals"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(Integer, primary_key=True)
     symbol = Column(String(30), nullable=False, index=True)
     bias = Column(String(5), nullable=False)  # LONG / SHORT
     entry_price = Column(Float, nullable=False)
@@ -111,15 +111,15 @@ class Signal(Base):
     score = Column(Float)
 
     strategy_variant_id = Column(Integer, ForeignKey("strategy_variants.id"), nullable=True)
-    score_breakdown = Column(Text, nullable=True)   # JSON
-    indicator_scores = Column(Text, nullable=True)   # JSON
-    detected_patterns = Column(Text, nullable=True)  # JSON
+    score_breakdown = Column(JSON, nullable=True)
+    indicator_scores = Column(JSON, nullable=True)
+    detected_patterns = Column(JSON, nullable=True)
     reasoning = Column(Text, nullable=True)
 
     # New: regime + decision trace (Faz 9)
     regime = Column(String(20), nullable=True)
-    alternative_signals = Column(Text, nullable=True)  # JSON
-    rejection_reasons = Column(Text, nullable=True)    # JSON
+    alternative_signals = Column(JSON, nullable=True)
+    rejection_reasons = Column(JSON, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
@@ -129,7 +129,7 @@ class Signal(Base):
 class PaperTrade(Base):
     __tablename__ = "paper_trades"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(Integer, primary_key=True)
     signal_id = Column(Integer, ForeignKey("signals.id"), nullable=True)
     symbol = Column(String(30), nullable=False, index=True)
     bias = Column(String(5), nullable=False)
@@ -165,7 +165,7 @@ class PaperTrade(Base):
 class TradeSnapshot(Base):
     __tablename__ = "trade_snapshots"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(Integer, primary_key=True)
     paper_trade_id = Column(Integer, ForeignKey("paper_trades.id"), nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
     current_price = Column(Float, nullable=False)
@@ -177,7 +177,7 @@ class TradeSnapshot(Base):
 class CoinConfig(Base):
     __tablename__ = "coin_config"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(Integer, primary_key=True)
     symbol = Column(String(30), unique=True, nullable=False)
     best_strategy_id = Column(Integer, ForeignKey("strategy_variants.id"), nullable=True)
     auto_trade = Column(Boolean, default=False)
@@ -199,7 +199,7 @@ class CoinConfig(Base):
 class FundingData(Base):
     __tablename__ = "funding_data"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(Integer, primary_key=True)
     symbol = Column(String(30), nullable=False, index=True)
     timestamp = Column(DateTime, nullable=False, index=True)
     funding_rate = Column(Float, nullable=True)
@@ -214,7 +214,7 @@ class FundingData(Base):
 class MarketRegimeRecord(Base):
     __tablename__ = "market_regime_records"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(Integer, primary_key=True)
     symbol = Column(String(30), nullable=False, index=True)
     timeframe = Column(String(5), nullable=False)
     timestamp = Column(DateTime, nullable=False, index=True)
@@ -232,7 +232,7 @@ class MarketRegimeRecord(Base):
 class CorrelationCache(Base):
     __tablename__ = "correlation_cache"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(Integer, primary_key=True)
     symbol_a = Column(String(30), nullable=False, index=True)
     symbol_b = Column(String(30), nullable=False, index=True)
     correlation = Column(Float, nullable=False)

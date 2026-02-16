@@ -1,4 +1,4 @@
-# Database
+# Database (legacy SQLite artifacts)
 phalidae.db
 phalidae.db-wal
 phalidae.db-shm

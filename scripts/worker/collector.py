@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 
 import ccxt
 import pandas as pd
-from sqlalchemy import func, text
+from sqlalchemy import func
 
 from db.engine import get_session
 from db.models import OHLCVData, TrackedSymbol, FundingData, MarketRegimeRecord
@@ -53,9 +53,7 @@ def refresh_tracked_symbols(top_n: int = 50):
     session = get_session()
     try:
         # Deactivate all first
-        session.execute(
-            text("UPDATE tracked_symbols SET is_active = 0")
-        )
+        session.query(TrackedSymbol).update({TrackedSymbol.is_active: False})
 
         for rank, (sym, _vol) in enumerate(top_symbols, 1):
             existing = session.query(TrackedSymbol).filter_by(symbol=sym).first()

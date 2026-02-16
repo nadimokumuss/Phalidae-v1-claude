@@ -8,7 +8,6 @@ Each variant is a composition of indicators from 4 categories:
   - volatility (Optional): 0-1 volatility filter
 """
 
-import json
 import random
 import logging
 from itertools import combinations
@@ -37,10 +36,10 @@ def _make_name(comp: dict) -> str:
     return " | ".join(parts)
 
 
-def _variant_exists(session, composition_json: str) -> bool:
+def _variant_exists(session, composition: dict) -> bool:
     """Check if an identical composition already exists."""
-    existing = session.query(StrategyVariant.id).filter_by(
-        composition=composition_json
+    existing = session.query(StrategyVariant.id).filter(
+        StrategyVariant.composition == composition
     ).first()
     return existing is not None
 
@@ -106,8 +105,7 @@ def generate_seed_variants() -> int:
         ]
 
         for comp in variants:
-            comp_json = json.dumps(comp, sort_keys=True)
-            if _variant_exists(session, comp_json):
+            if _variant_exists(session, comp):
                 continue
 
             t_thresh, e_thresh, vol_req = random.choice(threshold_combos)
@@ -115,7 +113,7 @@ def generate_seed_variants() -> int:
 
             session.add(StrategyVariant(
                 name=name,
-                composition=comp_json,
+                composition=comp,
                 trend_threshold=t_thresh,
                 entry_threshold=e_thresh,
                 volume_required=vol_req,
@@ -160,13 +158,12 @@ def generate_random_variants(count: int = 20) -> int:
                 "volatility": [random.choice(all_volatility)] if use_volatility else [],
             }
 
-            comp_json = json.dumps(comp, sort_keys=True)
-            if _variant_exists(session, comp_json):
+            if _variant_exists(session, comp):
                 continue
 
             session.add(StrategyVariant(
                 name=_make_name(comp),
-                composition=comp_json,
+                composition=comp,
                 trend_threshold=round(random.uniform(0.15, 0.5), 2),
                 entry_threshold=round(random.uniform(0.15, 0.5), 2),
                 volume_required=random.choice([True, False]),
@@ -218,7 +215,7 @@ def generate_genetic_variants(top_n: int = 10, children: int = 15) -> int:
         for row in top_ids:
             variant = session.query(StrategyVariant).get(row.strategy_variant_id)
             if variant:
-                parents.append(json.loads(variant.composition))
+                parents.append(variant.composition)
 
         for _ in range(children * 3):
             if created >= children:
@@ -241,13 +238,12 @@ def generate_genetic_variants(top_n: int = 10, children: int = 15) -> int:
                 n = len(child[cat])
                 child[cat] = random.sample(pool, min(n, len(pool)))
 
-            comp_json = json.dumps(child, sort_keys=True)
-            if _variant_exists(session, comp_json):
+            if _variant_exists(session, child):
                 continue
 
             session.add(StrategyVariant(
                 name=_make_name(child),
-                composition=comp_json,
+                composition=child,
                 trend_threshold=round(random.uniform(0.2, 0.45), 2),
                 entry_threshold=round(random.uniform(0.2, 0.45), 2),
                 volume_required=random.choice([True, False]),

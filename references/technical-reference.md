@@ -21,11 +21,10 @@ Phalidae v1/
 ├── signal_generator.py         # Legacy + strategy-based sinyal üretici
 ├── charting.py                 # Plotly grafikler (candlestick, equity curve, P&L timeline)
 ├── requirements.txt            # streamlit, ccxt, pandas, numpy, ta, plotly, scipy, sqlalchemy, apscheduler
-├── phalidae.db                 # SQLite veritabanı (runtime'da oluşur)
 │
 ├── db/
 │   ├── __init__.py             # Exports: get_engine, get_session, create_all, tüm modeller
-│   ├── engine.py               # SQLAlchemy engine (SQLite WAL mode), session factory
+│   ├── engine.py               # SQLAlchemy engine (PostgreSQL, connection pooling), session factory
 │   └── models.py               # 11 ORM model
 │
 ├── worker/
@@ -57,7 +56,7 @@ Phalidae v1/
 
 ---
 
-## Veritabanı (SQLite + SQLAlchemy)
+## Veritabanı (PostgreSQL + SQLAlchemy)
 
 ### 11 Tablo ve İlişkileri
 
@@ -81,8 +80,8 @@ Phalidae v1/
 - `PaperTrade` → has_many → `TradeSnapshot`
 - `CoinConfig.best_strategy_id` → FK → `StrategyVariant`
 
-### WAL Mode
-`engine.py` her bağlantıda `PRAGMA journal_mode=WAL` çalıştırır. `check_same_thread=False` ile Streamlit + scheduler aynı process'te concurrent erişim sağlar.
+### Connection Pooling
+`engine.py` PostgreSQL bağlantı havuzu kullanır (`pool_size=10`, `max_overflow=20`, `pool_pre_ping=True`). Bağlantı bilgisi `.env` dosyasındaki `DATABASE_URL` değişkeninden okunur.
 
 ---
 

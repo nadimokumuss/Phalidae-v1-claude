@@ -5,7 +5,6 @@ Legacy API (analyze_symbol, scan_market) korunur.
 Yeni: analyze_symbol_with_strategy() strateji bazlı analiz + DB okuma.
 """
 
-import json
 import pandas as pd
 import numpy as np
 import ccxt
@@ -511,9 +510,9 @@ def get_recent_signals_from_db(limit: int = 50) -> list[dict]:
                 "score": sig.score,
                 "strategy_name": strat_name or "Legacy",
                 "reasoning": sig.reasoning or "",
-                "score_breakdown": json.loads(sig.score_breakdown) if sig.score_breakdown else {},
-                "indicator_scores": json.loads(sig.indicator_scores) if sig.indicator_scores else {},
-                "detected_patterns": json.loads(sig.detected_patterns) if sig.detected_patterns else [],
+                "score_breakdown": sig.score_breakdown or {},
+                "indicator_scores": sig.indicator_scores or {},
+                "detected_patterns": sig.detected_patterns or [],
                 "created_at": sig.created_at.isoformat() if sig.created_at else "",
             })
         return signals

@@ -1,35 +1,41 @@
 """
 Phalidae v2 - SQLAlchemy Engine & Session Factory
-SQLite with WAL mode for concurrent read/write.
+PostgreSQL with connection pooling.
 """
 
 import os
-from sqlalchemy import create_engine, event
+from dotenv import load_dotenv
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 
-_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "phalidae.db")
+load_dotenv()
+
+_DB_URL = (
+    os.environ.get("DATABASE_URL")
+    or os.environ.get("DATABASE_PRIVATE_URL")
+    or os.environ.get("DATABASE_PUBLIC_URL")
+)
+if not _DB_URL:
+    raise RuntimeError(
+        "No database URL found. Set DATABASE_URL, DATABASE_PRIVATE_URL, "
+        "or DATABASE_PUBLIC_URL as an environment variable."
+    )
+if _DB_URL.startswith("postgres://"):
+    _DB_URL = _DB_URL.replace("postgres://", "postgresql://", 1)
 _ENGINE = None
 _SESSION_FACTORY = None
-
-
-def _enable_wal(dbapi_conn, connection_record):
-    cursor = dbapi_conn.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA synchronous=NORMAL")
-    cursor.execute("PRAGMA busy_timeout=5000")
-    cursor.close()
 
 
 def get_engine():
     global _ENGINE
     if _ENGINE is None:
         _ENGINE = create_engine(
-            f"sqlite:///{_DB_PATH}",
+            _DB_URL,
             echo=False,
             pool_pre_ping=True,
-            connect_args={"check_same_thread": False},
+            pool_size=10,
+            max_overflow=20,
         )
-        event.listen(_ENGINE, "connect", _enable_wal)
     return _ENGINE
 
 

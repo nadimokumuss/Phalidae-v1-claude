@@ -4,8 +4,6 @@ System status, data coverage, active trades summary, best strategies per coin.
 Includes: regime display, funding rate table, daily P&L tracker.
 """
 
-import os
-import json
 import streamlit as st
 import pandas as pd
 from datetime import datetime
@@ -16,7 +14,7 @@ from db.models import (
     StrategyPerformance, CoinConfig, Signal, FundingData,
     MarketRegimeRecord,
 )
-from sqlalchemy import func
+from sqlalchemy import func, text
 
 REGIME_COLORS = {
     "TRENDING_UP": "#26a69a",
@@ -57,8 +55,8 @@ def render():
         col4.metric("Acik Trade", open_trades)
 
         # DB size
-        db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "phalidae.db")
-        db_size_mb = os.path.getsize(db_path) / (1024 * 1024) if os.path.exists(db_path) else 0
+        db_size_result = session.execute(text("SELECT pg_database_size(current_database())")).scalar()
+        db_size_mb = (db_size_result or 0) / (1024 * 1024)
 
         col5, col6, col7, col8 = st.columns(4)
         total_signals = session.query(func.count(Signal.id)).scalar() or 0

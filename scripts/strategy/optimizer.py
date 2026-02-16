@@ -3,7 +3,6 @@ Phalidae v2 - Strategy Optimization Engine
 Backtests all variants, scores them, ranks per symbol, manages genetic evolution.
 """
 
-import json
 import logging
 from datetime import datetime
 
@@ -80,9 +79,8 @@ def _optimize_symbol(symbol: str, variants: list[StrategyVariant]) -> int:
 
     try:
         for variant in variants:
-            try:
-                composition = json.loads(variant.composition)
-            except (json.JSONDecodeError, TypeError):
+            composition = variant.composition
+            if not isinstance(composition, dict):
                 continue
 
             metrics = backtest_variant(
@@ -320,7 +318,7 @@ def get_top_strategies(symbol: str, limit: int = 10) -> list[dict]:
             strategies.append({
                 "variant_id": variant.id,
                 "name": variant.name,
-                "composition": json.loads(variant.composition),
+                "composition": variant.composition,
                 "rank": perf.rank,
                 "composite_score": perf.composite_score,
                 "win_rate": perf.win_rate,

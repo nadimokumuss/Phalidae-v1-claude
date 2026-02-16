@@ -4,7 +4,6 @@ Runs every 15 min (analyzer) and 5 min (trade checker).
 Includes: regime-aware strategy selection, trailing stop, time stop, decision trace.
 """
 
-import json
 import logging
 from datetime import datetime
 
@@ -120,7 +119,7 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant):
     finally:
         session.close()
 
-    composition = json.loads(best_variant.composition)
+    composition = best_variant.composition
     keys = []
     for cat in ["trend", "entry", "volume", "volatility"]:
         keys.extend(composition.get(cat, []))
@@ -188,18 +187,18 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant):
             confidence=confidence,
             score=round(total_score, 1),
             strategy_variant_id=selected_variant_id,
-            score_breakdown=json.dumps({
+            score_breakdown={
                 "indicators": result["total_normalized"],
                 "patterns": pattern_score,
-            }),
-            indicator_scores=json.dumps(result["scores"]),
-            detected_patterns=json.dumps([
+            },
+            indicator_scores=result["scores"],
+            detected_patterns=[
                 {"pattern": p["pattern"], "bias": p["bias"], "strength": p["strength"]}
                 for p in patterns[:20]
-            ]),
+            ],
             regime=current_regime,
-            alternative_signals=json.dumps(alternative_signals) if alternative_signals else None,
-            rejection_reasons=json.dumps(rejection_reasons) if rejection_reasons else None,
+            alternative_signals=alternative_signals or None,
+            rejection_reasons=rejection_reasons or None,
             reasoning=generate_reasoning(
                 symbol, bias, total_score,
                 composition, result["scores"], patterns,
@@ -288,7 +287,7 @@ def _evaluate_alternatives(
 
         for perf, alt_variant in top_perfs:
             try:
-                comp = json.loads(alt_variant.composition)
+                comp = alt_variant.composition
                 alt_keys = []
                 for cat in ["trend", "entry", "volume", "volatility"]:
                     alt_keys.extend(comp.get(cat, []))

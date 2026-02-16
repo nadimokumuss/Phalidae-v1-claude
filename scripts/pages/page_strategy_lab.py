@@ -4,7 +4,6 @@ Per-coin strategy rankings, variant details, comparison, global leaderboard.
 Includes: regime-based performance breakdown, correlation matrix, regime filters.
 """
 
-import json
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -171,9 +170,9 @@ def _render_global_leaderboard():
     rows = []
     for r in results:
         try:
-            comp = json.loads(r.composition)
+            comp = r.composition if isinstance(r.composition, dict) else {}
             trend_str = ", ".join(comp.get("trend", []))
-        except (json.JSONDecodeError, TypeError):
+        except (TypeError, AttributeError):
             trend_str = "?"
 
         rows.append({
@@ -222,8 +221,8 @@ def _render_variant_detail():
     st.subheader(f"Varyant #{v['id']}: {v['name']}")
 
     try:
-        comp = json.loads(v["composition"])
-    except (json.JSONDecodeError, TypeError):
+        comp = v["composition"] if isinstance(v["composition"], dict) else {}
+    except (TypeError, AttributeError):
         comp = {}
 
     c1, c2, c3, c4 = st.columns(4)

@@ -4,7 +4,7 @@
 
 Phalidae is a self-learning crypto futures trading bot targeting Binance USDM Perpetual Futures (`ccxt.binanceusdm`). It automatically generates, backtests, and ranks strategy variants using 67 technical indicators across 4 categories, then executes the best strategies via paper trading.
 
-**Tech stack:** Python 3.10+ · Streamlit · SQLAlchemy (SQLite WAL) · APScheduler · ccxt · pandas · plotly
+**Tech stack:** Python 3.10+ · Streamlit · SQLAlchemy (PostgreSQL) · APScheduler · ccxt · pandas · plotly
 
 ## Build & Run
 
@@ -12,14 +12,21 @@ Phalidae is a self-learning crypto futures trading bot targeting Binance USDM Pe
 # Install dependencies
 pip install -r requirements.txt
 
+# PostgreSQL setup (one-time)
+createdb phalidae
+# Or: psql -c "CREATE DATABASE phalidae;"
+
+# Configure .env (already provided with defaults)
+# DATABASE_URL=postgresql://phalidae:phalidae@localhost:5432/phalidae
+
 # Enable pre-commit hook (protects patterns.py & levels.py)
 git config core.hooksPath .hooks
 
-# Start the trading system (creates DB + seeds 300 strategies on first run)
+# Start the trading system (creates tables + seeds 300 strategies on first run)
 streamlit run scripts/app.py
 ```
 
-**Runtime artifact:** `phalidae.db` is created at project root (gitignored).
+**Prerequisites:** PostgreSQL must be running locally. Connection string is read from `.env` (`DATABASE_URL`).
 
 ## Coding Standards
 
@@ -27,7 +34,7 @@ streamlit run scripts/app.py
 - **Formatting:** PEP 8, 4-space indentation
 - **Naming:** `snake_case` for functions/variables, `PascalCase` for classes
 - **Error handling:** Always wrap exchange API calls (`ccxt`) in try/except. SQLAlchemy sessions must be properly closed.
-- **Thread safety:** Streamlit + APScheduler share the same process. Use SQLAlchemy WAL mode (already configured in `scripts/db/engine.py`).
+- **Thread safety:** Streamlit + APScheduler share the same process. PostgreSQL connection pooling is configured in `scripts/db/engine.py` (pool_size=10, max_overflow=20).
 - **No secrets in code:** API keys go in `.env` (gitignored), never hardcoded.
 
 ## Directory Structure
@@ -37,7 +44,7 @@ Phalidae-v1-master/
 ├── .claude/
 │   ├── settings.json                   # Shared project permissions (in git)
 │   ├── settings.local.json             # Local overrides (gitignored)
-│   ├── mcp.json                        # MCP: SQLite server → phalidae.db
+│   ├── mcp.json                        # MCP: PostgreSQL server → phalidae DB
 │   ├── agents/                         # 7 specialized sub-agents
 │   │   ├── backtest-analyst.md         # Backtest quality & overfitting analysis (read-only)
 │   │   ├── bug-debugger.md             # Scheduler, data pipeline & concurrency debugging
@@ -61,7 +68,7 @@ Phalidae-v1-master/
 │   ├── signal_generator.py             # Signal generation (legacy + strategy-based)
 │   ├── charting.py                     # Plotly charts
 │   ├── db/                             # SQLAlchemy engine + 11 ORM models
-│   │   ├── engine.py                   # Engine config (SQLite WAL, check_same_thread=False)
+│   │   ├── engine.py                   # Engine config (PostgreSQL, connection pooling)
 │   │   └── models.py                   # All 11 table definitions
 │   ├── worker/                         # APScheduler: 6 background jobs
 │   │   ├── scheduler.py                # Job definitions and intervals
@@ -110,7 +117,7 @@ These files are protected by a pre-commit hook (see [Hooks](#hooks) section). An
 
 **Changing DB schema:**
 1. Update `scripts/db/models.py`
-2. Delete `phalidae.db` at project root
+2. Drop and recreate the `phalidae` database: `dropdb phalidae && createdb phalidae`
 3. Restart the application (tables are auto-created)
 4. Use the `db-manager` agent for safe schema migrations
 
@@ -147,7 +154,7 @@ Seven specialized agents are available in `.claude/agents/`:
 | Agent | Access Level | When to Use |
 |-------|-------------|-------------|
 | `backtest-analyst` | Read-only | Validating backtest results, detecting overfitting, checking statistical significance |
-| `bug-debugger` | Read & Write | Diagnosing scheduler failures, data gaps, SQLite locking, signal NaN errors |
+| `bug-debugger` | Read & Write | Diagnosing scheduler failures, data gaps, PostgreSQL connection issues, signal NaN errors |
 | `code-reviewer` | Read-only | Pre-merge review of trading logic, project rule compliance, Python best practices |
 | `db-manager` | Read & Write | Adding tables/columns, fixing data integrity issues, optimizing slow queries |
 | `indicator-developer` | Read & Write | Adding new indicators (3-step pipeline: compute → score → catalog) |
@@ -177,15 +184,15 @@ git config core.hooksPath .hooks
 
 ## MCP Servers
 
-### SQLite (phalidae.db)
+### PostgreSQL (phalidae)
 
 Configured in `.claude/mcp.json`. Provides direct SQL access to the runtime database for:
 - Querying `strategy_performance` to find top strategies per symbol
 - Inspecting `paper_trades` history and P&L distribution
 - Checking `ohlcv_data` coverage and gaps
-- Analyzing `signals` with their `score_breakdown` JSON
+- Analyzing `signals` with their `score_breakdown` JSONB
 
-**Prerequisite:** `npx` must be available (Node.js installed). The DB file is created after first `streamlit run`.
+**Prerequisite:** `npx` must be available (Node.js installed). PostgreSQL must be running with the `phalidae` database created.
 
 ## Technical Reference
 

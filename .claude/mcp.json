@@ -1,12 +1,11 @@
 {
   "mcpServers": {
-    "sqlite": {
+    "postgres": {
       "command": "npx",
       "args": [
         "-y",
-        "@anthropic/mcp-sqlite",
-        "--db-path",
-        "./phalidae.db"
+        "@anthropic/mcp-postgres",
+        "postgresql://phalidae:phalidae@localhost:5432/phalidae"
       ]
     }
   }
