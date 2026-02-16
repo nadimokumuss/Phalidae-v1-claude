@@ -189,6 +189,7 @@ Configured in `.claude/mcp.json`. Provides direct SQL access to the runtime data
 
 ## Technical Reference
 
-For detailed documentation including complete DB schema (11 tables), all scheduler jobs, critical function signatures, composite score formula, strategy variant composition, and indicator category mappings, see:
+For detailed documentation see:
 
-**`references/technical-reference.md`**
+- **`references/technical-reference.md`** — DB schema (11 tables), scheduler jobs, function signatures, composite score formula, strategy variant composition
+- **`references/analysis-methods.md`** — 67 indicators (sources, formulas, parameters), 60 candlestick patterns (detection rules), 12 S/R methods (algorithms), 6 market regimes (decision tree), scoring system (45 criteria with weights)
