@@ -15,10 +15,26 @@ _DB_URL = (
     or os.environ.get("DATABASE_PRIVATE_URL")
     or os.environ.get("DATABASE_PUBLIC_URL")
 )
+
+# Fallback: construct from Railway PG* variables
 if not _DB_URL:
+    pg_host = os.environ.get("PGHOST")
+    pg_port = os.environ.get("PGPORT", "5432")
+    pg_user = os.environ.get("PGUSER")
+    pg_pass = os.environ.get("PGPASSWORD")
+    pg_db = os.environ.get("PGDATABASE")
+    if pg_host and pg_user and pg_db:
+        _DB_URL = f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+
+if not _DB_URL:
+    import logging
+    logging.error(
+        "ENV DUMP (DB-related): %s",
+        {k: v[:20] + "..." for k, v in os.environ.items()
+         if any(x in k.upper() for x in ["DATABASE", "PG", "POSTGRES"])}
+    )
     raise RuntimeError(
-        "No database URL found. Set DATABASE_URL, DATABASE_PRIVATE_URL, "
-        "or DATABASE_PUBLIC_URL as an environment variable."
+        "No database URL found. Set DATABASE_URL or configure PGHOST/PGUSER/PGDATABASE."
     )
 if _DB_URL.startswith("postgres://"):
     _DB_URL = _DB_URL.replace("postgres://", "postgresql://", 1)
