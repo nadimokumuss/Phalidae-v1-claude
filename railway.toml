@@ -2,6 +2,6 @@
 builder = "nixpacks"
 
 [deploy]
-startCommand = "streamlit run scripts/app.py --server.port=8501 --server.address=0.0.0.0"
+startCommand = "streamlit run scripts/app.py --server.port=${PORT:-8501} --server.address=0.0.0.0"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 10
