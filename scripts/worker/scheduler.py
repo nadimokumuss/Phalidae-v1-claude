@@ -103,6 +103,40 @@ def _job_portfolio_snapshot():
         logger.error(f"Portfolio snapshot job error: {e}")
 
 
+def _bootstrap():
+    """Run once at startup: ensure symbols exist, then trigger first collection."""
+    logger.info("Bootstrap: starting initial data pipeline...")
+    try:
+        # Step 1: Ensure tracked symbols exist
+        from db.engine import get_session
+        from db.models import TrackedSymbol
+        session = get_session()
+        try:
+            count = session.query(TrackedSymbol).filter_by(is_active=True).count()
+        finally:
+            session.close()
+
+        if count == 0:
+            logger.info("Bootstrap: no symbols found, running refresh_tracked_symbols...")
+            _job_refresh_symbols()
+
+        # Step 2: Run first collection immediately
+        logger.info("Bootstrap: running initial collector...")
+        _job_collect()
+
+        # Step 3: Run market data + regime
+        logger.info("Bootstrap: running initial market data...")
+        _job_market_data()
+
+        # Step 4: Run news collector
+        logger.info("Bootstrap: running initial news collection...")
+        _job_collect_news()
+
+        logger.info("Bootstrap: initial pipeline complete")
+    except Exception as e:
+        logger.error(f"Bootstrap error: {e}")
+
+
 def start_scheduler():
     """Start the background scheduler with all jobs."""
     global _scheduler, _started
@@ -112,6 +146,19 @@ def start_scheduler():
 
     _scheduler = BackgroundScheduler(daemon=True)
 
+    now = datetime.utcnow()
+
+    # Symbol Refresh - every 24 hours, start immediately
+    _scheduler.add_job(
+        _job_refresh_symbols,
+        trigger=IntervalTrigger(hours=24),
+        id="symbol_refresh",
+        name="Symbol Refresh",
+        replace_existing=True,
+        max_instances=1,
+        next_run_time=now,  # Run immediately
+    )
+
     # OHLCV Collector - every 5 minutes
     _scheduler.add_job(
         _job_collect,
@@ -120,36 +167,7 @@ def start_scheduler():
         name="OHLCV Collector",
         replace_existing=True,
         max_instances=1,
-    )
-
-    # Signal Analyzer - every 15 minutes
-    _scheduler.add_job(
-        _job_analyze,
-        trigger=IntervalTrigger(minutes=15),
-        id="analyzer",
-        name="Signal Analyzer",
-        replace_existing=True,
-        max_instances=1,
-    )
-
-    # Trade Checker - every 5 minutes
-    _scheduler.add_job(
-        _job_check_trades,
-        trigger=IntervalTrigger(minutes=5),
-        id="trade_checker",
-        name="Trade Checker",
-        replace_existing=True,
-        max_instances=1,
-    )
-
-    # Strategy Optimizer - every 6 hours
-    _scheduler.add_job(
-        _job_optimize,
-        trigger=IntervalTrigger(hours=6),
-        id="optimizer",
-        name="Strategy Optimizer",
-        replace_existing=True,
-        max_instances=1,
+        next_run_time=now + timedelta(seconds=30),  # 30s after start (after symbols loaded)
     )
 
     # Market Data Collector - every 15 minutes
@@ -160,22 +178,46 @@ def start_scheduler():
         name="Market Data Collector",
         replace_existing=True,
         max_instances=1,
+        next_run_time=now + timedelta(seconds=45),  # 45s after start
     )
 
-    # Symbol Refresh - every 24 hours
+    # Signal Analyzer - every 15 minutes
     _scheduler.add_job(
-        _job_refresh_symbols,
-        trigger=IntervalTrigger(hours=24),
-        id="symbol_refresh",
-        name="Symbol Refresh",
+        _job_analyze,
+        trigger=IntervalTrigger(minutes=15),
+        id="analyzer",
+        name="Signal Analyzer",
         replace_existing=True,
         max_instances=1,
+        next_run_time=now + timedelta(minutes=2),  # 2min after start (needs data)
+    )
+
+    # Trade Checker - every 5 minutes
+    _scheduler.add_job(
+        _job_check_trades,
+        trigger=IntervalTrigger(minutes=5),
+        id="trade_checker",
+        name="Trade Checker",
+        replace_existing=True,
+        max_instances=1,
+        next_run_time=now + timedelta(minutes=2, seconds=30),
+    )
+
+    # Strategy Optimizer - every 6 hours
+    _scheduler.add_job(
+        _job_optimize,
+        trigger=IntervalTrigger(hours=6),
+        id="optimizer",
+        name="Strategy Optimizer",
+        replace_existing=True,
+        max_instances=1,
+        next_run_time=now + timedelta(minutes=10),  # 10min after start (needs data)
     )
 
     # Phase 1: Quick optimization - runs once, 3 minutes after startup
     _scheduler.add_job(
         _job_quick_optimize,
-        trigger=DateTrigger(run_date=datetime.utcnow() + timedelta(minutes=3)),
+        trigger=DateTrigger(run_date=now + timedelta(minutes=3)),
         id="quick_optimizer",
         name="Quick Optimizer (startup)",
         replace_existing=True,
@@ -200,9 +242,10 @@ def start_scheduler():
         name="News Collector",
         replace_existing=True,
         max_instances=1,
+        next_run_time=now + timedelta(seconds=15),  # Run quickly
     )
 
-    # Phase 2: Portfolio Snapshot - every 5 minutes (with trade checker)
+    # Phase 2: Portfolio Snapshot - every 5 minutes
     _scheduler.add_job(
         _job_portfolio_snapshot,
         trigger=IntervalTrigger(minutes=5),
@@ -210,11 +253,12 @@ def start_scheduler():
         name="Portfolio Snapshot",
         replace_existing=True,
         max_instances=1,
+        next_run_time=now + timedelta(minutes=1),
     )
 
     _scheduler.start()
     _started = True
-    logger.info("Scheduler started with 10 jobs")
+    logger.info("Scheduler started with 10 jobs (all with immediate first-run)")
     return _scheduler
 
 

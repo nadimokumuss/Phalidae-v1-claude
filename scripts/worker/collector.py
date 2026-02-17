@@ -212,9 +212,22 @@ def collect_incremental():
         session.close()
 
     if not symbol_list:
-        logger.warning("No active symbols to collect")
-        _finish_agent_job(job_id, "SUCCESS", 0, context={"reason": "no_symbols"})
-        return
+        logger.warning("No active symbols — auto-refreshing symbol list...")
+        try:
+            refresh_tracked_symbols(top_n=50)
+            session = get_session()
+            try:
+                symbols = session.query(TrackedSymbol).filter_by(is_active=True).all()
+                symbol_list = [s.symbol for s in symbols]
+            finally:
+                session.close()
+        except Exception as e:
+            logger.error(f"Auto-refresh failed: {e}")
+
+        if not symbol_list:
+            logger.error("Still no symbols after auto-refresh")
+            _finish_agent_job(job_id, "SUCCESS", 0, context={"reason": "no_symbols"})
+            return
 
     total_new = 0
     try:
