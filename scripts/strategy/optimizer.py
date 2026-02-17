@@ -112,18 +112,18 @@ def _optimize_symbol(symbol: str, variants: list[StrategyVariant], max_bars: int
                 )
                 session.add(perf)
 
-            perf.total_trades = metrics["total_trades"]
-            perf.winning_trades = metrics["winning_trades"]
-            perf.losing_trades = metrics["losing_trades"]
-            perf.win_rate = metrics["win_rate"]
-            perf.profit_factor = metrics["profit_factor"]
-            perf.sharpe_ratio = metrics["sharpe_ratio"]
-            perf.max_drawdown = metrics["max_drawdown"]
-            perf.total_pnl_pct = metrics["total_pnl_pct"]
-            perf.regime_trending_score = metrics.get("regime_trending_score", 0.0)
-            perf.regime_ranging_score = metrics.get("regime_ranging_score", 0.0)
-            perf.regime_volatile_score = metrics.get("regime_volatile_score", 0.0)
-            perf.composite_score = composite
+            perf.total_trades = int(metrics["total_trades"])
+            perf.winning_trades = int(metrics["winning_trades"])
+            perf.losing_trades = int(metrics["losing_trades"])
+            perf.win_rate = float(metrics["win_rate"])
+            perf.profit_factor = float(metrics["profit_factor"])
+            perf.sharpe_ratio = float(metrics["sharpe_ratio"])
+            perf.max_drawdown = float(metrics["max_drawdown"])
+            perf.total_pnl_pct = float(metrics["total_pnl_pct"])
+            perf.regime_trending_score = float(metrics.get("regime_trending_score", 0.0))
+            perf.regime_ranging_score = float(metrics.get("regime_ranging_score", 0.0))
+            perf.regime_volatile_score = float(metrics.get("regime_volatile_score", 0.0))
+            perf.composite_score = float(composite)
             perf.updated_at = datetime.utcnow()
             saved += 1
 
