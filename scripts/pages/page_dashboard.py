@@ -369,16 +369,25 @@ def _render_daily_pnl(session):
 
 def _render_market_news():
     """Phase 4: Show today's market news."""
+    import os
     try:
         from worker.news_collector import get_todays_events
         events = get_todays_events(limit=10)
-    except (ImportError, Exception):
+    except ImportError:
         events = []
+    except Exception as e:
+        st.subheader("Piyasa Haberleri")
+        st.warning(f"Haber yuklenirken hata: {e}")
+        return
 
     st.subheader("Piyasa Haberleri")
 
     if not events:
-        st.caption("Haber verisi henuz mevcut degil. CRYPTOPANIC_API_KEY ayarlandiginda gorunecek.")
+        api_key = os.environ.get("CRYPTOPANIC_API_KEY", "")
+        if not api_key:
+            st.caption("CRYPTOPANIC_API_KEY env variable ayarlanmamis.")
+        else:
+            st.caption("Haber verisi henuz mevcut degil. Bir sonraki toplama dongusunde gorunecek.")
         return
 
     for e in events:

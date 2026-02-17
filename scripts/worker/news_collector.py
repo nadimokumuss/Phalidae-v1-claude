@@ -15,7 +15,6 @@ from worker.collector import _start_agent_job, _finish_agent_job
 
 logger = logging.getLogger("phalidae.news")
 
-CRYPTOPANIC_API_KEY = os.environ.get("CRYPTOPANIC_API_KEY", "")
 CRYPTOPANIC_URL = "https://cryptopanic.com/api/v1/posts/"
 
 # Map common crypto symbols to CryptoPanic currency codes
@@ -35,8 +34,9 @@ SYMBOL_MAP = {
 
 def collect_news():
     """Fetch latest news from CryptoPanic. Called every 15 minutes."""
-    if not CRYPTOPANIC_API_KEY:
-        logger.debug("CRYPTOPANIC_API_KEY not set, skipping news collection")
+    api_key = os.environ.get("CRYPTOPANIC_API_KEY", "")
+    if not api_key:
+        logger.warning("CRYPTOPANIC_API_KEY not set, skipping news collection")
         return
 
     job_id = _start_agent_job("news_collector")
@@ -44,7 +44,7 @@ def collect_news():
 
     try:
         params = {
-            "auth_token": CRYPTOPANIC_API_KEY,
+            "auth_token": api_key,
             "public": "true",
             "kind": "news",
         }
