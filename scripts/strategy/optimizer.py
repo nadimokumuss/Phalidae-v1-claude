@@ -1,6 +1,8 @@
 """
 Phalidae v2 - Strategy Optimization Engine
 Backtests all variants, scores them, ranks per symbol, manages genetic evolution.
+Phase 1: Agent health logging + quick optimization.
+Phase 3: Longer backtest with deep data.
 """
 
 import logging
@@ -19,7 +21,7 @@ from db.models import (
 from indicators import compute_all_indicators
 from strategy.backtester import backtest_variant
 from strategy.variants import generate_random_variants, generate_genetic_variants
-from worker.collector import get_ohlcv_df
+from worker.collector import get_ohlcv_df, _start_agent_job, _finish_agent_job
 
 logger = logging.getLogger("phalidae.optimizer")
 
@@ -59,10 +61,10 @@ def compute_composite_score(metrics: dict) -> float:
     return round(score, 4)
 
 
-def _optimize_symbol(symbol: str, variants: list[StrategyVariant]) -> int:
+def _optimize_symbol(symbol: str, variants: list[StrategyVariant], max_bars: int = 1000) -> int:
     """Run backtest for all variants on a single symbol. Returns number of results saved."""
-    # Get OHLCV data (4h primary timeframe for backtest)
-    df = get_ohlcv_df(symbol, "4h", limit=1000)
+    # Phase 3: Use more bars if available
+    df = get_ohlcv_df(symbol, "4h", limit=max_bars)
     if df.empty or len(df) < 250:
         logger.info(f"Skipping {symbol}: insufficient data ({len(df)} bars)")
         return 0
@@ -170,7 +172,7 @@ def _update_best_strategies():
 
             config = session.query(CoinConfig).filter_by(symbol=ts.symbol).first()
             if config is None:
-                config = CoinConfig(symbol=ts.symbol)
+                config = CoinConfig(symbol=ts.symbol, auto_trade=True)
                 session.add(config)
 
             config.best_strategy_id = best.strategy_variant_id
@@ -193,51 +195,124 @@ def run_optimization():
     3. Backtest all variants on all active symbols
     4. Update rankings and best strategies
     """
-    logger.info("Starting optimization cycle...")
-
-    # 1. Generate new exploration variants
-    generate_random_variants(count=10)
-
-    # 2. Genetic crossover
-    generate_genetic_variants(top_n=10, children=10)
-
-    # 3. Get all variants and active symbols
-    session = get_session()
-    try:
-        variants = session.query(StrategyVariant).all()
-        symbols = (
-            session.query(TrackedSymbol)
-            .filter_by(is_active=True)
-            .order_by(TrackedSymbol.rank)
-            .limit(30)  # Top 30 by volume for optimization
-            .all()
-        )
-        variant_list = list(variants)
-        symbol_list = [s.symbol for s in symbols]
-    finally:
-        session.close()
-
-    if not variants or not symbol_list:
-        logger.warning("No variants or symbols for optimization")
-        return
-
-    logger.info(f"Optimizing {len(variant_list)} variants across {len(symbol_list)} symbols")
-
-    # 4. Backtest each symbol
+    job_id = _start_agent_job("optimizer")
     total_saved = 0
-    for i, sym in enumerate(symbol_list):
-        saved = _optimize_symbol(sym, variant_list)
-        total_saved += saved
-        if (i + 1) % 5 == 0:
-            logger.info(f"Progress: {i+1}/{len(symbol_list)} symbols")
 
-    # 5. Update best strategies
-    _update_best_strategies()
+    try:
+        logger.info("Starting optimization cycle...")
 
-    # 6. Compute correlations between symbols
-    _compute_correlations(symbol_list)
+        # 1. Generate new exploration variants
+        generate_random_variants(count=10)
 
-    logger.info(f"Optimization complete: {total_saved} results saved")
+        # 2. Genetic crossover
+        generate_genetic_variants(top_n=10, children=10)
+
+        # 3. Get all variants and active symbols
+        session = get_session()
+        try:
+            variants = session.query(StrategyVariant).all()
+            symbols = (
+                session.query(TrackedSymbol)
+                .filter_by(is_active=True)
+                .order_by(TrackedSymbol.rank)
+                .limit(30)
+                .all()
+            )
+            variant_list = list(variants)
+            symbol_list = [s.symbol for s in symbols]
+        finally:
+            session.close()
+
+        if not variants or not symbol_list:
+            logger.warning("No variants or symbols for optimization")
+            _finish_agent_job(job_id, "SUCCESS", 0, context={"reason": "no_data"})
+            return
+
+        logger.info(f"Optimizing {len(variant_list)} variants across {len(symbol_list)} symbols")
+
+        # Phase 3: Use 3000 bars if sufficient data, else 1000
+        session = get_session()
+        try:
+            sample_count = session.query(func.count(OHLCVData.id)).filter_by(
+                symbol=symbol_list[0], timeframe="4h"
+            ).scalar() or 0
+        finally:
+            session.close()
+
+        max_bars = 3000 if sample_count >= 3000 else 1000
+
+        # 4. Backtest each symbol
+        for i, sym in enumerate(symbol_list):
+            saved = _optimize_symbol(sym, variant_list, max_bars=max_bars)
+            total_saved += saved
+            if (i + 1) % 5 == 0:
+                logger.info(f"Progress: {i+1}/{len(symbol_list)} symbols")
+
+        # 5. Update best strategies
+        _update_best_strategies()
+
+        # 6. Compute correlations between symbols
+        _compute_correlations(symbol_list)
+
+        logger.info(f"Optimization complete: {total_saved} results saved")
+        _finish_agent_job(job_id, "SUCCESS", total_saved, context={
+            "symbols": len(symbol_list), "variants": len(variant_list), "max_bars": max_bars,
+        })
+    except Exception as e:
+        logger.error(f"Optimization error: {e}")
+        _finish_agent_job(job_id, "FAILED", total_saved, error=str(e))
+
+
+def run_quick_optimization(top_symbols: int = 10, top_variants: int = 50):
+    """
+    Phase 1: Quick optimization for initial startup.
+    Runs on top N symbols with first M variants, using 500 bars.
+    Takes ~2-3 minutes vs full optimization's ~60 minutes.
+    """
+    job_id = _start_agent_job("quick_optimizer")
+    total_saved = 0
+
+    try:
+        logger.info(f"Quick optimization: top {top_symbols} symbols, {top_variants} variants")
+
+        session = get_session()
+        try:
+            variants = (
+                session.query(StrategyVariant)
+                .limit(top_variants)
+                .all()
+            )
+            symbols = (
+                session.query(TrackedSymbol)
+                .filter_by(is_active=True)
+                .order_by(TrackedSymbol.rank)
+                .limit(top_symbols)
+                .all()
+            )
+            variant_list = list(variants)
+            symbol_list = [s.symbol for s in symbols]
+        finally:
+            session.close()
+
+        if not variant_list or not symbol_list:
+            logger.warning("Quick optimization: no variants or symbols")
+            _finish_agent_job(job_id, "SUCCESS", 0, context={"reason": "no_data"})
+            return
+
+        for sym in symbol_list:
+            saved = _optimize_symbol(sym, variant_list, max_bars=500)
+            total_saved += saved
+
+        # Update best strategies
+        _update_best_strategies()
+
+        logger.info(f"Quick optimization completed: {total_saved} results for {len(symbol_list)} symbols")
+        _finish_agent_job(job_id, "SUCCESS", total_saved, context={
+            "symbols": len(symbol_list), "variants": len(variant_list),
+        })
+    except Exception as e:
+        logger.error(f"Quick optimization error: {e}")
+        _finish_agent_job(job_id, "FAILED", total_saved, error=str(e))
 
 
 def _compute_correlations(symbol_list: list[str]):
@@ -264,7 +339,6 @@ def _compute_correlations(symbol_list: list[str]):
     session = get_session()
     try:
         syms = list(returns_dict.keys())
-        from datetime import datetime
         now = datetime.utcnow()
 
         for i in range(len(syms)):

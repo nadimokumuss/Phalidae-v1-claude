@@ -1,6 +1,7 @@
 """
-Phalidae v2 - Signals Page
+Phalidae v2 - Signals Page (Phase 5)
 Two modes: "Canli Tarama" (legacy scan) + "Otomatik Sinyaller" (from DB).
+Includes: confidence bar (0-100), ETA display, invalidation notes.
 """
 
 import streamlit as st
@@ -11,9 +12,11 @@ from signal_generator import (
     get_recent_signals_from_db,
 )
 from charting import plot_interactive_chart
+from commentary import generate_page_header
 
 
 def render():
+    generate_page_header("Sinyaller")
     st.title("Sinyaller")
 
     mode = st.radio(
@@ -39,24 +42,30 @@ def _render_db_signals():
     st.success(f"Son {len(signals)} sinyal")
 
     # Filters
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         bias_f = st.multiselect("Yon", ["LONG", "SHORT"], default=["LONG", "SHORT"])
     with col2:
         conf_f = st.multiselect("Guven", ["YUKSEK", "ORTA", "DUSUK"], default=["YUKSEK", "ORTA"])
     with col3:
         min_score = st.slider("Min |Skor|", 0.0, 10.0, 2.5, 0.5)
+    with col4:
+        min_conf_score = st.slider("Min Guven Skoru", 0, 100, 0, 5)
 
     filtered = [
         s for s in signals
         if s["bias"] in bias_f
         and s.get("confidence", "") in conf_f
         and abs(s.get("score", 0)) >= min_score
+        and (s.get("confidence_score") or 0) >= min_conf_score
     ]
 
     rows = []
     for s in filtered:
         cn = s["symbol"].replace("/USDT:USDT", "")
+        conf_score = s.get("confidence_score")
+        eta_low = s.get("eta_hours_low")
+        eta_high = s.get("eta_hours_high")
         rows.append({
             "Coin": cn,
             "Yon": s["bias"],
@@ -65,7 +74,9 @@ def _render_db_signals():
             "SL ($)": s.get("sl"),
             "R:R": s.get("rr_ratio"),
             "Guven": s.get("confidence", ""),
+            "Skor (0-100)": f"{conf_score:.0f}" if conf_score else "-",
             "Skor": s.get("score", 0),
+            "ETA": f"{eta_low:.0f}-{eta_high:.0f}s" if eta_low and eta_high else "-",
             "Strateji": s.get("strategy_name", ""),
             "Zaman": s.get("created_at", "")[:16],
         })
@@ -196,9 +207,45 @@ def _render_live_scan():
 
 
 def _render_signal_detail(sig: dict):
-    """Render detail for a DB signal."""
+    """Render detail for a DB signal with confidence bar, ETA, invalidation."""
     cn = sig["symbol"].replace("/USDT:USDT", "")
 
+    # --- Confidence Score Bar (Phase 5) ---
+    conf_score = sig.get("confidence_score")
+    if conf_score is not None:
+        if conf_score >= 75:
+            conf_color = "🟢"
+            conf_label = "Yuksek"
+        elif conf_score >= 50:
+            conf_color = "🟡"
+            conf_label = "Orta"
+        else:
+            conf_color = "🔴"
+            conf_label = "Dusuk"
+
+        st.markdown(f"### {conf_color} Guven Skoru: {conf_score:.0f}/100 ({conf_label})")
+        st.progress(min(conf_score / 100, 1.0), text=f"Guven: {conf_score:.0f}/100")
+
+        # Confidence breakdown
+        breakdown = sig.get("confidence_breakdown", {})
+        if breakdown:
+            with st.expander("Guven Dagilimi"):
+                bd_cols = st.columns(4)
+                bd_items = list(breakdown.items())
+                for idx, (component, value) in enumerate(bd_items):
+                    label_map = {
+                        "confluence": "Confluence",
+                        "regime_fit": "Rejim Uyumu",
+                        "rr_quality": "R:R Kalitesi",
+                        "patterns": "Pattern",
+                        "volume": "Hacim",
+                        "backtest": "Backtest",
+                        "news": "Haber Riski",
+                    }
+                    display_name = label_map.get(component, component)
+                    bd_cols[idx % 4].metric(display_name, f"{value:.1f}")
+
+    # Metrics row
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Yon", sig["bias"])
     c2.metric("Entry", f"${sig['entry']:,.2f}")
@@ -206,9 +253,30 @@ def _render_signal_detail(sig: dict):
     c4.metric("SL", f"${sig.get('sl', 0):,.2f}" if sig.get("sl") else "-")
     c5.metric("Skor", f"{sig.get('score', 0):+.1f}")
 
+    # --- ETA Display (Phase 5) ---
+    eta_low = sig.get("eta_hours_low")
+    eta_high = sig.get("eta_hours_high")
+    if eta_low and eta_high:
+        st.info(f"Tahmini Sure: {eta_low:.0f}-{eta_high:.0f} saat")
+
+    # --- News Risk (Phase 5) ---
+    news_risk = sig.get("news_risk_score")
+    if news_risk is not None and news_risk > 0:
+        if news_risk > 0.7:
+            st.error(f"Haber Riski: Yuksek ({news_risk:.2f})")
+        elif news_risk > 0.3:
+            st.warning(f"Haber Riski: Orta ({news_risk:.2f})")
+        else:
+            st.caption(f"Haber Riski: Dusuk ({news_risk:.2f})")
+
+    # --- Invalidation Note (Phase 5) ---
+    invalidation = sig.get("invalidation_note")
+    if invalidation:
+        st.error(f"Iptal Kosulu: {invalidation}")
+
     # Reasoning
     if sig.get("reasoning"):
-        with st.expander("Analiz Aciklamasi"):
+        with st.expander("Analiz Aciklamasi", expanded=True):
             st.text(sig["reasoning"])
 
     # Indicator scores

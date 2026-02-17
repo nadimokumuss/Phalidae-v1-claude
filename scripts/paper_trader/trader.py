@@ -93,19 +93,35 @@ def open_paper_trade(
     leverage: float | None = None,
     position_size_usd: float | None = None,
     regime_at_entry: str | None = None,
+    tp2_price: float | None = None,
+    tp3_price: float | None = None,
 ) -> int | None:
     """
     Open a new paper trade. Returns trade ID or None if rejected.
-    Uses coin-specific leverage and position size from CoinConfig.
+    Phase 2: Portfolio-aware position sizing + multi-TP.
     """
+    from worker.collector import _start_agent_job, _finish_agent_job
+    job_id = _start_agent_job("open_trade")
+
     session = get_session()
     try:
         # Load coin config for per-coin settings
         config = session.query(CoinConfig).filter_by(symbol=symbol).first()
         if leverage is None:
             leverage = config.leverage if config and config.leverage else DEFAULT_LEVERAGE
+
+        # Phase 2: Portfolio-based position sizing
         if position_size_usd is None:
-            position_size_usd = config.max_position_size if config and config.max_position_size else DEFAULT_POSITION_SIZE
+            try:
+                from paper_trader.portfolio import calculate_position_size, can_open_trade
+                allowed, reason = can_open_trade(symbol)
+                if not allowed:
+                    logger.info(f"Portfolio rejected {symbol}: {reason}")
+                    _finish_agent_job(job_id, "SUCCESS", 0, context={"rejected": reason})
+                    return None
+                position_size_usd = calculate_position_size(symbol, bias, entry_price, sl_price, leverage)
+            except ImportError:
+                position_size_usd = config.max_position_size if config and config.max_position_size else DEFAULT_POSITION_SIZE
 
         # Check limits
         open_for_symbol = (
@@ -115,30 +131,48 @@ def open_paper_trade(
         )
         if open_for_symbol >= MAX_OPEN_TRADES_PER_SYMBOL:
             logger.info(f"Skip: already {open_for_symbol} open trades for {symbol}")
+            _finish_agent_job(job_id, "SUCCESS", 0, context={"rejected": "max_per_symbol"})
             return None
 
         total_open = session.query(PaperTrade).filter_by(status="OPEN").count()
         if total_open >= MAX_TOTAL_OPEN_TRADES:
             logger.info(f"Skip: max open trades reached ({total_open})")
+            _finish_agent_job(job_id, "SUCCESS", 0, context={"rejected": "max_total"})
             return None
 
         # Daily drawdown check
         if not _check_daily_drawdown(session, symbol):
+            _finish_agent_job(job_id, "SUCCESS", 0, context={"rejected": "daily_dd"})
             return None
 
         # Correlation check
         if not _check_correlation(session, symbol):
+            _finish_agent_job(job_id, "SUCCESS", 0, context={"rejected": "correlation"})
             return None
 
         # Calculate liquidation price
         pnl_info = calculate_pnl(entry_price, entry_price, bias, leverage, position_size_usd)
+
+        # Phase 2: partial_tp_price = TP1 (the first tp_price)
+        partial_tp_price = tp_price  # TP1 for partial close
+
+        # Risk as % of portfolio
+        risk_pct = None
+        try:
+            from paper_trader.portfolio import get_portfolio_equity
+            equity = get_portfolio_equity()
+            if equity > 0:
+                distance = abs(entry_price - sl_price) / entry_price
+                risk_pct = round(position_size_usd * distance * leverage / equity * 100, 2)
+        except ImportError:
+            pass
 
         trade = PaperTrade(
             signal_id=signal_id,
             symbol=symbol,
             bias=bias,
             entry_price=entry_price,
-            tp_price=tp_price,
+            tp_price=tp2_price or tp_price,  # Main TP = TP2
             sl_price=sl_price,
             leverage=leverage,
             liquidation_price=pnl_info["liquidation_price"],
@@ -146,19 +180,25 @@ def open_paper_trade(
             status="OPEN",
             reasoning=reasoning,
             regime_at_entry=regime_at_entry,
-            trailing_stop_price=sl_price,  # Initialize trailing stop at SL
+            trailing_stop_price=sl_price,
+            partial_tp_price=partial_tp_price,  # TP1
+            tp2_price=tp2_price,
+            tp3_price=tp3_price,
+            risk_pct=risk_pct,
             opened_at=datetime.utcnow(),
         )
         session.add(trade)
         session.commit()
 
         trade_id = trade.id
-        logger.info(f"Opened paper trade #{trade_id}: {symbol} {bias} @ {entry_price} ({leverage}x)")
+        logger.info(f"Opened paper trade #{trade_id}: {symbol} {bias} @ {entry_price} ({leverage}x) size=${position_size_usd:.0f}")
+        _finish_agent_job(job_id, "SUCCESS", 1, context={"trade_id": trade_id, "size": position_size_usd})
         return trade_id
 
     except Exception as e:
         session.rollback()
         logger.error(f"Open trade error: {e}")
+        _finish_agent_job(job_id, "FAILED", 0, error=str(e))
         return None
     finally:
         session.close()

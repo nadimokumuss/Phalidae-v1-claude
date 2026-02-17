@@ -1,6 +1,8 @@
 """
 Phalidae v2 - OHLCV Data Collector
 Handles backfill + incremental collection for tracked symbols.
+Phase 1: Agent health logging + retry logic.
+Phase 3: Deep backfill support.
 """
 
 import logging
@@ -12,7 +14,7 @@ import pandas as pd
 from sqlalchemy import func
 
 from db.engine import get_session
-from db.models import OHLCVData, TrackedSymbol, FundingData, MarketRegimeRecord
+from db.models import OHLCVData, TrackedSymbol, FundingData, MarketRegimeRecord, AgentJob
 
 logger = logging.getLogger("phalidae.collector")
 
@@ -32,6 +34,48 @@ def _get_exchange() -> ccxt.binanceusdm:
     if _exchange is None:
         _exchange = ccxt.binanceusdm({"enableRateLimit": True})
     return _exchange
+
+
+def _start_agent_job(job_name: str) -> int:
+    """Create a RUNNING agent job record. Returns the job ID."""
+    session = get_session()
+    try:
+        job = AgentJob(
+            job_name=job_name,
+            status="RUNNING",
+            started_at=datetime.utcnow(),
+        )
+        session.add(job)
+        session.commit()
+        return job.id
+    except Exception:
+        session.rollback()
+        return 0
+    finally:
+        session.close()
+
+
+def _finish_agent_job(job_id: int, status: str, records: int = 0, error: str = None, context: dict = None):
+    """Update an agent job with completion info."""
+    if job_id == 0:
+        return
+    session = get_session()
+    try:
+        job = session.query(AgentJob).get(job_id)
+        if job:
+            job.status = status
+            job.completed_at = datetime.utcnow()
+            job.duration_sec = (job.completed_at - job.started_at).total_seconds()
+            job.records_affected = records
+            if error:
+                job.error_message = str(error)[:2000]
+            if context:
+                job.context = context
+            session.commit()
+    except Exception:
+        session.rollback()
+    finally:
+        session.close()
 
 
 def refresh_tracked_symbols(top_n: int = 50):
@@ -72,17 +116,29 @@ def refresh_tracked_symbols(top_n: int = 50):
         session.close()
 
 
+def _fetch_with_retry(symbol: str, timeframe: str, limit: int = 200, since_ms: int = None, retries: int = 3):
+    """Fetch OHLCV with exponential backoff retry."""
+    exchange = _get_exchange()
+    for attempt in range(retries):
+        try:
+            bars = exchange.fetch_ohlcv(
+                symbol, timeframe=timeframe, limit=limit, since=since_ms
+            )
+            return bars
+        except Exception as e:
+            if attempt < retries - 1:
+                wait = (3 ** attempt)  # 1s, 3s, 9s
+                logger.debug(f"Retry {attempt+1}/{retries} for {symbol} {timeframe}: {e} (wait {wait}s)")
+                time.sleep(wait)
+            else:
+                logger.warning(f"Fetch failed {symbol} {timeframe} after {retries} retries: {e}")
+                return None
+    return None
+
+
 def _fetch_and_store(symbol: str, timeframe: str, limit: int = 200, since_ms: int = None):
     """Fetch OHLCV from Binance and store in DB. Returns number of new rows."""
-    exchange = _get_exchange()
-    try:
-        bars = exchange.fetch_ohlcv(
-            symbol, timeframe=timeframe, limit=limit, since=since_ms
-        )
-    except Exception as e:
-        logger.warning(f"Fetch failed {symbol} {timeframe}: {e}")
-        return 0
-
+    bars = _fetch_with_retry(symbol, timeframe, limit, since_ms)
     if not bars:
         return 0
 
@@ -147,6 +203,7 @@ def backfill_symbol(symbol: str):
 
 def collect_incremental():
     """Incremental collection job: fetch latest candles for all active symbols."""
+    job_id = _start_agent_job("collector")
     session = get_session()
     try:
         symbols = session.query(TrackedSymbol).filter_by(is_active=True).all()
@@ -156,17 +213,23 @@ def collect_incremental():
 
     if not symbol_list:
         logger.warning("No active symbols to collect")
+        _finish_agent_job(job_id, "SUCCESS", 0, context={"reason": "no_symbols"})
         return
 
     total_new = 0
-    for sym in symbol_list:
-        for tf in TIMEFRAMES:
-            new = _fetch_and_store(sym, tf, limit=50)
-            total_new += new
-        time.sleep(0.05)
+    try:
+        for sym in symbol_list:
+            for tf in TIMEFRAMES:
+                new = _fetch_and_store(sym, tf, limit=50)
+                total_new += new
+            time.sleep(0.05)
 
-    if total_new > 0:
-        logger.info(f"Incremental: {total_new} new candles across {len(symbol_list)} symbols")
+        if total_new > 0:
+            logger.info(f"Incremental: {total_new} new candles across {len(symbol_list)} symbols")
+        _finish_agent_job(job_id, "SUCCESS", total_new, context={"symbols": len(symbol_list)})
+    except Exception as e:
+        logger.error(f"Collector error: {e}")
+        _finish_agent_job(job_id, "FAILED", total_new, error=str(e))
 
 
 def initial_setup():
@@ -222,6 +285,8 @@ def collect_market_data():
     Collect funding rate, open interest, and bid-ask spread for all active symbols.
     Called every 15 minutes by scheduler.
     """
+    job_id = _start_agent_job("market_data")
+
     session = get_session()
     try:
         symbols = session.query(TrackedSymbol).filter_by(is_active=True).all()
@@ -230,6 +295,7 @@ def collect_market_data():
         session.close()
 
     if not symbol_list:
+        _finish_agent_job(job_id, "SUCCESS", 0)
         return
 
     exchange = _get_exchange()
@@ -238,73 +304,77 @@ def collect_market_data():
     rounded_ts = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
 
     collected = 0
-    for sym in symbol_list:
-        try:
-            funding_rate = None
-            open_interest = None
-            spread_pct = None
-
-            # Funding rate
+    try:
+        for sym in symbol_list:
             try:
-                fr = exchange.fetch_funding_rate(sym)
-                funding_rate = fr.get("fundingRate")
-            except Exception as e:
-                logger.debug(f"Funding rate error for {sym}: {e}")
+                funding_rate = None
+                open_interest = None
+                spread_pct = None
 
-            # Open interest
-            try:
-                oi = exchange.fetch_open_interest(sym)
-                open_interest = oi.get("openInterestValue") or oi.get("openInterestAmount")
-            except Exception as e:
-                logger.debug(f"Open interest error for {sym}: {e}")
-
-            # Bid-ask spread from ticker
-            try:
-                ticker = exchange.fetch_ticker(sym)
-                bid = ticker.get("bid", 0) or 0
-                ask = ticker.get("ask", 0) or 0
-                if bid > 0 and ask > 0:
-                    mid = (bid + ask) / 2
-                    spread_pct = ((ask - bid) / mid) * 100
-            except Exception as e:
-                logger.debug(f"Spread error for {sym}: {e}")
-
-            if funding_rate is not None or open_interest is not None or spread_pct is not None:
-                session = get_session()
+                # Funding rate
                 try:
-                    # Upsert
-                    existing = session.query(FundingData).filter_by(
-                        symbol=sym, timestamp=rounded_ts
-                    ).first()
-                    if existing is None:
-                        session.add(FundingData(
-                            symbol=sym,
-                            timestamp=rounded_ts,
-                            funding_rate=funding_rate,
-                            open_interest=open_interest,
-                            spread_pct=spread_pct,
-                        ))
-                    else:
-                        if funding_rate is not None:
-                            existing.funding_rate = funding_rate
-                        if open_interest is not None:
-                            existing.open_interest = open_interest
-                        if spread_pct is not None:
-                            existing.spread_pct = spread_pct
-                    session.commit()
-                    collected += 1
-                except Exception:
-                    session.rollback()
-                finally:
-                    session.close()
+                    fr = exchange.fetch_funding_rate(sym)
+                    funding_rate = fr.get("fundingRate")
+                except Exception as e:
+                    logger.debug(f"Funding rate error for {sym}: {e}")
 
-            time.sleep(0.1)  # Rate limiting
+                # Open interest
+                try:
+                    oi = exchange.fetch_open_interest(sym)
+                    open_interest = oi.get("openInterestValue") or oi.get("openInterestAmount")
+                except Exception as e:
+                    logger.debug(f"Open interest error for {sym}: {e}")
 
-        except Exception as e:
-            logger.warning(f"Market data error for {sym}: {e}")
+                # Bid-ask spread from ticker
+                try:
+                    ticker = exchange.fetch_ticker(sym)
+                    bid = ticker.get("bid", 0) or 0
+                    ask = ticker.get("ask", 0) or 0
+                    if bid > 0 and ask > 0:
+                        mid = (bid + ask) / 2
+                        spread_pct = ((ask - bid) / mid) * 100
+                except Exception as e:
+                    logger.debug(f"Spread error for {sym}: {e}")
 
-    if collected > 0:
-        logger.info(f"Collected market data for {collected} symbols")
+                if funding_rate is not None or open_interest is not None or spread_pct is not None:
+                    session = get_session()
+                    try:
+                        # Upsert
+                        existing = session.query(FundingData).filter_by(
+                            symbol=sym, timestamp=rounded_ts
+                        ).first()
+                        if existing is None:
+                            session.add(FundingData(
+                                symbol=sym,
+                                timestamp=rounded_ts,
+                                funding_rate=funding_rate,
+                                open_interest=open_interest,
+                                spread_pct=spread_pct,
+                            ))
+                        else:
+                            if funding_rate is not None:
+                                existing.funding_rate = funding_rate
+                            if open_interest is not None:
+                                existing.open_interest = open_interest
+                            if spread_pct is not None:
+                                existing.spread_pct = spread_pct
+                        session.commit()
+                        collected += 1
+                    except Exception:
+                        session.rollback()
+                    finally:
+                        session.close()
+
+                time.sleep(0.1)  # Rate limiting
+
+            except Exception as e:
+                logger.warning(f"Market data error for {sym}: {e}")
+
+        if collected > 0:
+            logger.info(f"Collected market data for {collected} symbols")
+        _finish_agent_job(job_id, "SUCCESS", collected)
+    except Exception as e:
+        _finish_agent_job(job_id, "FAILED", collected, error=str(e))
 
 
 def collect_regime_data():
@@ -366,3 +436,141 @@ def collect_regime_data():
 
     if saved > 0:
         logger.info(f"Saved regime data for {saved} symbols")
+
+
+# ═══════════════════════════════════════════════════
+# Phase 3: Deep backfill
+# ═══════════════════════════════════════════════════
+
+DEEP_BACKFILL_TARGETS = {
+    "15m": 5000,   # ~52 days
+    "1h": 5000,    # ~208 days
+    "4h": 5000,    # ~833 days (~2.3 years)
+    "1d": 2000,    # ~5.5 years
+}
+
+TF_MS = {
+    "15m": 15 * 60 * 1000,
+    "1h": 60 * 60 * 1000,
+    "4h": 4 * 60 * 60 * 1000,
+    "1d": 24 * 60 * 60 * 1000,
+}
+
+
+def deep_backfill(symbol: str, timeframe: str, target_candles: int = None):
+    """
+    Deep backfill: iteratively fetch older candles in 1000-candle batches
+    until target_candles is reached.
+    """
+    if target_candles is None:
+        target_candles = DEEP_BACKFILL_TARGETS.get(timeframe, 5000)
+
+    job_id = _start_agent_job("deep_backfill")
+    total_new = 0
+
+    try:
+        session = get_session()
+        try:
+            current_count = session.query(func.count(OHLCVData.id)).filter_by(
+                symbol=symbol, timeframe=timeframe
+            ).scalar() or 0
+            earliest = session.query(func.min(OHLCVData.timestamp)).filter_by(
+                symbol=symbol, timeframe=timeframe
+            ).scalar()
+        finally:
+            session.close()
+
+        if current_count >= target_candles:
+            _finish_agent_job(job_id, "SUCCESS", 0, context={
+                "symbol": symbol, "tf": timeframe, "reason": "already_sufficient",
+                "current": current_count, "target": target_candles,
+            })
+            return
+
+        remaining = target_candles - current_count
+        batch_size = 1000
+        tf_ms = TF_MS.get(timeframe, 4 * 60 * 60 * 1000)
+
+        # Start from earliest known timestamp, or from now
+        if earliest:
+            since_ms = int(earliest.timestamp() * 1000) - (batch_size * tf_ms)
+        else:
+            since_ms = int(datetime.utcnow().timestamp() * 1000) - (batch_size * tf_ms)
+
+        batches = 0
+        while remaining > 0 and batches < 20:  # safety limit
+            fetch_limit = min(batch_size, remaining)
+            new = _fetch_and_store(symbol, timeframe, limit=fetch_limit, since_ms=since_ms)
+            total_new += new
+            batches += 1
+
+            if new == 0:
+                break  # No more data available
+
+            remaining -= new
+            since_ms -= (batch_size * tf_ms)  # Go further back
+            time.sleep(1)  # Rate limit between batches
+
+            logger.info(f"Deep backfill {symbol} {timeframe}: batch {batches}, +{new} candles (total new: {total_new})")
+
+        _finish_agent_job(job_id, "SUCCESS", total_new, context={
+            "symbol": symbol, "tf": timeframe, "batches": batches,
+        })
+    except Exception as e:
+        logger.error(f"Deep backfill error for {symbol} {timeframe}: {e}")
+        _finish_agent_job(job_id, "FAILED", total_new, error=str(e))
+
+
+def deep_backfill_job():
+    """
+    Daily deep backfill job: processes 5 symbols per run (round-robin).
+    After 10 days, all 50 symbols will have deep history.
+    """
+    job_id = _start_agent_job("deep_backfill_daily")
+    total_new = 0
+
+    try:
+        session = get_session()
+        try:
+            # Get symbols ordered by least data first
+            symbols = (
+                session.query(TrackedSymbol)
+                .filter_by(is_active=True)
+                .order_by(TrackedSymbol.rank)
+                .all()
+            )
+            symbol_list = [s.symbol for s in symbols]
+        finally:
+            session.close()
+
+        if not symbol_list:
+            _finish_agent_job(job_id, "SUCCESS", 0)
+            return
+
+        # Pick 5 symbols that have least data
+        symbol_data_counts = []
+        session = get_session()
+        try:
+            for sym in symbol_list:
+                count = session.query(func.count(OHLCVData.id)).filter_by(
+                    symbol=sym, timeframe="4h"
+                ).scalar() or 0
+                symbol_data_counts.append((sym, count))
+        finally:
+            session.close()
+
+        symbol_data_counts.sort(key=lambda x: x[1])
+        batch_symbols = [s[0] for s in symbol_data_counts[:5]]
+
+        for sym in batch_symbols:
+            for tf in ["4h", "1h"]:  # Prioritize 4h and 1h
+                deep_backfill(sym, tf)
+            time.sleep(2)
+
+        logger.info(f"Deep backfill daily complete for {len(batch_symbols)} symbols")
+        _finish_agent_job(job_id, "SUCCESS", total_new, context={
+            "symbols": [s.replace("/USDT:USDT", "") for s in batch_symbols],
+        })
+    except Exception as e:
+        logger.error(f"Deep backfill daily error: {e}")
+        _finish_agent_job(job_id, "FAILED", total_new, error=str(e))

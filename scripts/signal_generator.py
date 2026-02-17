@@ -478,6 +478,188 @@ def analyze_symbol_with_strategy(
     }
 
 
+# ═══════════════════════════════════════════════════
+# Phase 2: Multi-TP calculation
+# ═══════════════════════════════════════════════════
+
+def calculate_multi_tp(entry: float, atr: float, bias: str) -> dict:
+    """
+    Calculate three TP levels:
+    TP1 = entry +/- 1.5×ATR (partial 50% close)
+    TP2 = entry +/- 2.5×ATR (30% close)
+    TP3 = entry +/- 4.0×ATR (trailing 20%)
+    """
+    if bias == "LONG":
+        tp1 = round(entry + 1.5 * atr, 6)
+        tp2 = round(entry + 2.5 * atr, 6)
+        tp3 = round(entry + 4.0 * atr, 6)
+    elif bias == "SHORT":
+        tp1 = round(entry - 1.5 * atr, 6)
+        tp2 = round(entry - 2.5 * atr, 6)
+        tp3 = round(entry - 4.0 * atr, 6)
+    else:
+        return {"tp1": entry, "tp2": entry, "tp3": entry}
+
+    return {"tp1": tp1, "tp2": tp2, "tp3": tp3}
+
+
+# ═══════════════════════════════════════════════════
+# Phase 5: Confidence scoring (0-100)
+# ═══════════════════════════════════════════════════
+
+def calculate_confidence_score(
+    indicator_scores: dict,
+    pattern_count: int,
+    regime: str,
+    rr_ratio: float,
+    news_risk: float = 0.0,
+    backtest_win_rate: float = 0.0,
+    volume_confirmation: float = 0.0,
+) -> tuple[float, dict]:
+    """
+    0-100 confidence score with breakdown.
+
+    Components (total 100):
+    - Confluence (max 25): same-direction indicator count / total × 25
+    - Regime fit (max 20): backtest win rate in this regime × 20
+    - R:R quality (max 15): min(rr_ratio / 3, 1) × 15
+    - Pattern support (max 10): min(pattern_count / 3, 1) × 10
+    - Volume confirmation (max 10): volume_confirmation × 10
+    - Backtest history (max 10): backtest_win_rate × 10
+    - News risk (max 10): (1 - news_risk) × 10
+    """
+    # Confluence: how many indicators agree on direction
+    if indicator_scores:
+        positive = sum(1 for v in indicator_scores.values() if isinstance(v, (int, float)) and v > 0)
+        negative = sum(1 for v in indicator_scores.values() if isinstance(v, (int, float)) and v < 0)
+        total = len([v for v in indicator_scores.values() if isinstance(v, (int, float)) and v != 0])
+        majority = max(positive, negative)
+        confluence = (majority / total * 25) if total > 0 else 0
+    else:
+        confluence = 0
+
+    # Regime fit
+    regime_fit = backtest_win_rate * 20
+
+    # R:R quality
+    rr_quality = min(rr_ratio / 3.0, 1.0) * 15 if rr_ratio else 0
+
+    # Pattern support
+    pattern_support = min(pattern_count / 3.0, 1.0) * 10
+
+    # Volume confirmation
+    vol_conf = volume_confirmation * 10
+
+    # Backtest history
+    bt_history = backtest_win_rate * 10
+
+    # News risk
+    news_comp = (1.0 - news_risk) * 10
+
+    total_score = confluence + regime_fit + rr_quality + pattern_support + vol_conf + bt_history + news_comp
+    total_score = round(min(max(total_score, 0), 100), 1)
+
+    breakdown = {
+        "confluence": round(confluence, 1),
+        "regime_fit": round(regime_fit, 1),
+        "rr_quality": round(rr_quality, 1),
+        "pattern_support": round(pattern_support, 1),
+        "volume_confirmation": round(vol_conf, 1),
+        "backtest_history": round(bt_history, 1),
+        "news_risk": round(news_comp, 1),
+    }
+
+    return total_score, breakdown
+
+
+# ═══════════════════════════════════════════════════
+# Phase 5: ETA estimation
+# ═══════════════════════════════════════════════════
+
+def estimate_time_to_target(
+    symbol: str,
+    bias: str,
+    entry: float,
+    tp: float,
+    timeframe: str = "4h",
+) -> tuple[float, float]:
+    """
+    Estimate time to reach TP based on historical ATR movement speed.
+    Returns (hours_low, hours_high) estimates.
+    Fallback: ATR-based estimate if insufficient data.
+    """
+    try:
+        from worker.collector import get_ohlcv_df
+        from indicators import compute_all_indicators
+
+        df = get_ohlcv_df(symbol, timeframe, limit=200)
+        if df.empty or len(df) < 50:
+            return _fallback_eta(entry, tp, timeframe)
+
+        df = compute_all_indicators(df)
+        if "atr" not in df.columns:
+            return _fallback_eta(entry, tp, timeframe)
+
+        atr = df["atr"].iloc[-1]
+        if pd.isna(atr) or atr <= 0:
+            return _fallback_eta(entry, tp, timeframe)
+
+        # Distance in ATR units
+        distance = abs(tp - entry)
+        atr_distance = distance / atr
+
+        # Average bars to move 1 ATR (historical)
+        # Look at how many bars it typically takes to move 1 ATR
+        moves = []
+        closes = df["close"].values
+        atr_values = df["atr"].values
+        for i in range(50, len(closes)):
+            if pd.notna(atr_values[i]) and atr_values[i] > 0:
+                bars_for_atr = 0
+                cumulative_move = 0
+                for j in range(i, max(i-20, 0), -1):
+                    cumulative_move += abs(closes[j] - closes[j-1]) if j > 0 else 0
+                    bars_for_atr += 1
+                    if cumulative_move >= atr_values[i]:
+                        break
+                if bars_for_atr > 0:
+                    moves.append(bars_for_atr)
+
+        if moves:
+            avg_bars_per_atr = sum(moves) / len(moves)
+        else:
+            avg_bars_per_atr = 6  # Default: ~6 bars per ATR for 4h
+
+        estimated_bars = atr_distance * avg_bars_per_atr
+
+        # Convert to hours
+        tf_hours = {"15m": 0.25, "1h": 1, "4h": 4, "1d": 24}
+        hours_per_bar = tf_hours.get(timeframe, 4)
+
+        hours_mid = estimated_bars * hours_per_bar
+        hours_low = max(hours_mid * 0.5, 1)
+        hours_high = hours_mid * 1.5
+
+        return round(hours_low, 1), round(hours_high, 1)
+
+    except Exception:
+        return _fallback_eta(entry, tp, timeframe)
+
+
+def _fallback_eta(entry: float, tp: float, timeframe: str = "4h") -> tuple[float, float]:
+    """Simple fallback ETA based on distance percentage."""
+    distance_pct = abs(tp - entry) / entry * 100 if entry > 0 else 5
+
+    tf_hours = {"15m": 0.25, "1h": 1, "4h": 4, "1d": 24}
+    hours_per_bar = tf_hours.get(timeframe, 4)
+
+    # Rough estimate: 1% move per ~3 bars on 4h
+    estimated_bars = distance_pct * 3
+    hours = estimated_bars * hours_per_bar
+
+    return round(max(hours * 0.5, 1), 1), round(hours * 1.5, 1)
+
+
 def get_recent_signals_from_db(limit: int = 50) -> list[dict]:
     """Fetch recent signals from database."""
     try:
@@ -514,6 +696,12 @@ def get_recent_signals_from_db(limit: int = 50) -> list[dict]:
                 "indicator_scores": sig.indicator_scores or {},
                 "detected_patterns": sig.detected_patterns or [],
                 "created_at": sig.created_at.isoformat() if sig.created_at else "",
+                "confidence_score": sig.confidence_score,
+                "confidence_breakdown": sig.confidence_breakdown or {},
+                "eta_hours_low": sig.eta_hours_low,
+                "eta_hours_high": sig.eta_hours_high,
+                "news_risk_score": sig.news_risk_score,
+                "invalidation_note": sig.invalidation_note,
             })
         return signals
     except Exception:

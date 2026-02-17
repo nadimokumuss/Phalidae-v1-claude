@@ -1,17 +1,19 @@
 """
-Phalidae v2 - Paper Trades Page
+Phalidae v2 - Paper Trades Page (Phase 2 + 5)
 Open/closed trades, equity curve, trade details with P&L timeline.
 Includes: MFE/MAE bars, trailing stop display, regime badge, enhanced reasoning.
+Phase 2: Trade management timeline, portfolio equity curve.
+Phase 5: Commentary header.
 """
 
-import json
 import streamlit as st
 import pandas as pd
 
 from db.engine import get_session
-from db.models import PaperTrade, TradeSnapshot, Signal
+from db.models import PaperTrade, TradeSnapshot, Signal, TradeManagementLog, PortfolioSnapshot
 from sqlalchemy import func
 from paper_trader.position import calculate_pnl
+from commentary import generate_page_header
 
 REGIME_LABELS = {
     "TRENDING_UP": "Yukari Trend",
@@ -24,6 +26,7 @@ REGIME_LABELS = {
 
 
 def render():
+    generate_page_header("Paper Trades")
     st.title("Paper Trades")
 
     session = get_session()
@@ -31,8 +34,8 @@ def render():
         _render_summary(session)
         st.divider()
 
-        tab_open, tab_closed, tab_detail = st.tabs([
-            "Acik Islemler", "Kapali Islemler", "Islem Detayi"
+        tab_open, tab_closed, tab_detail, tab_equity = st.tabs([
+            "Acik Islemler", "Kapali Islemler", "Islem Detayi", "Portfolio Equity"
         ])
 
         with tab_open:
@@ -41,6 +44,8 @@ def render():
             _render_closed_trades(session)
         with tab_detail:
             _render_trade_detail(session)
+        with tab_equity:
+            _render_portfolio_equity(session)
 
     finally:
         session.close()
@@ -69,13 +74,15 @@ def _render_summary(session):
 
         # Exit reason breakdown
         trail_stops = sum(1 for t in closed if t.status == "TRAILING_STOP")
+        partial_tps = sum(1 for t in closed if t.status == "PARTIAL_TP")
         time_expired = sum(1 for t in closed if t.status == "TIME_EXPIRED")
-        if trail_stops > 0 or time_expired > 0:
-            c7, c8 = st.columns(2)
+        if trail_stops > 0 or time_expired > 0 or partial_tps > 0:
+            c7, c8, c9 = st.columns(3)
             c7.metric("Trailing Stop", trail_stops)
-            c8.metric("Time Expired", time_expired)
+            c8.metric("Partial TP", partial_tps)
+            c9.metric("Time Expired", time_expired)
 
-        # Equity curve
+        # Equity curve from closed trades
         if len(closed) > 1:
             _render_equity_curve(closed)
     else:
@@ -105,7 +112,7 @@ def _render_equity_curve(closed_trades: list):
 
 
 def _render_open_trades(session):
-    """Show currently open trades with trailing stop info."""
+    """Show currently open trades with trailing stop info and partial TP status."""
     trades = session.query(PaperTrade).filter_by(status="OPEN").order_by(PaperTrade.opened_at.desc()).all()
 
     if not trades:
@@ -122,6 +129,8 @@ def _render_open_trades(session):
             "TP": f"${t.tp_price:,.2f}" if t.tp_price else "-",
             "SL": f"${t.sl_price:,.2f}" if t.sl_price else "-",
             "Trail SL": f"${t.trailing_stop_price:,.2f}" if t.trailing_stop_price else "-",
+            "Partial TP": "Alindi" if t.partial_tp_taken else "Bekliyor",
+            "Boyut": f"${t.position_size_usd:,.0f}" if t.position_size_usd else "-",
             "Kaldırac": f"{t.leverage:.0f}x",
             "MFE": f"{(t.mfe_pct or 0):+.1f}%",
             "MAE": f"{(t.mae_pct or 0):+.1f}%",
@@ -166,6 +175,7 @@ def _render_closed_trades(session):
             "Cikis": f"${t.exit_price:,.2f}" if t.exit_price else "-",
             "P&L $": f"${t.pnl_usd:+,.2f}",
             "P&L %": f"{t.pnl_percent:+.1f}%",
+            "Boyut": f"${t.position_size_usd:,.0f}" if t.position_size_usd else "-",
             "MFE": f"{(t.mfe_pct or 0):+.1f}%",
             "MAE": f"{(t.mae_pct or 0):+.1f}%",
             "Rejim": REGIME_LABELS.get(t.regime_at_entry, "-"),
@@ -177,7 +187,7 @@ def _render_closed_trades(session):
 
 
 def _render_trade_detail(session):
-    """Detailed view of a single trade with MFE/MAE visualization."""
+    """Detailed view of a single trade with MFE/MAE visualization and management timeline."""
     trades = (
         session.query(PaperTrade)
         .order_by(PaperTrade.opened_at.desc())
@@ -206,12 +216,28 @@ def _render_trade_detail(session):
     c3.metric("Durum", trade.exit_reason or trade.status)
     c4.metric("P&L", f"${trade.pnl_usd:+,.2f}" if trade.status != "OPEN" else "Acik")
 
-    # MFE/MAE visual
+    # MFE/MAE + position info
     c5, c6, c7, c8 = st.columns(4)
     c5.metric("MFE (Max Kar)", f"{(trade.mfe_pct or 0):+.1f}%")
     c6.metric("MAE (Max Kayip)", f"{(trade.mae_pct or 0):+.1f}%")
     c7.metric("Rejim", REGIME_LABELS.get(trade.regime_at_entry, "-"))
     c8.metric("Kaldırac", f"{trade.leverage:.0f}x")
+
+    # Phase 2: Additional position details
+    c9, c10, c11, c12 = st.columns(4)
+    c9.metric("Pozisyon", f"${trade.position_size_usd:,.0f}" if trade.position_size_usd else "-")
+    c10.metric("Risk %", f"{trade.risk_pct:.1f}%" if trade.risk_pct else "-")
+    c11.metric("Partial TP", "Alindi" if trade.partial_tp_taken else "Hayir")
+    partial_pnl = trade.partial_tp_pnl or 0
+    c12.metric("Partial P&L", f"${partial_pnl:+,.2f}" if partial_pnl != 0 else "-")
+
+    # TP levels display
+    if trade.partial_tp_price or trade.tp2_price or trade.tp3_price:
+        st.caption(
+            f"TP1: ${trade.partial_tp_price:,.2f}" if trade.partial_tp_price else "" +
+            (f" | TP2: ${trade.tp2_price:,.2f}" if trade.tp2_price else "") +
+            (f" | TP3: ${trade.tp3_price:,.2f}" if trade.tp3_price else "")
+        )
 
     # Trailing stop info
     if trade.trailing_stop_price:
@@ -228,6 +254,9 @@ def _render_trade_detail(session):
     if trade.reasoning:
         with st.expander("Islem Nedeni (Detayli)", expanded=True):
             st.text(trade.reasoning)
+
+    # --- Phase 2: Trade Management Timeline ---
+    _render_management_timeline(session, trade.id)
 
     # P&L timeline from snapshots
     snapshots = (
@@ -247,3 +276,111 @@ def _render_trade_detail(session):
         st.plotly_chart(fig, width="stretch")
     else:
         st.caption("Bu islem icin snapshot verisi yok.")
+
+
+def _render_management_timeline(session, trade_id: int):
+    """Show trade management log entries as a timeline."""
+    logs = (
+        session.query(TradeManagementLog)
+        .filter_by(paper_trade_id=trade_id)
+        .order_by(TradeManagementLog.timestamp)
+        .all()
+    )
+
+    if not logs:
+        return
+
+    with st.expander(f"Yonetim Gecmisi ({len(logs)} olay)", expanded=False):
+        event_labels = {
+            "BE_MOVED": "Break-Even",
+            "PARTIAL_TP": "Kismi Kar Al",
+            "TP2_HIT": "TP2 Ulasildi",
+            "TRAIL_UPDATED": "Trailing Guncellendi",
+            "SL_TIGHTENED": "SL Daraltildi",
+        }
+
+        rows = []
+        for log in logs:
+            rows.append({
+                "Zaman": log.timestamp.strftime("%m-%d %H:%M") if log.timestamp else "-",
+                "Olay": event_labels.get(log.event_type, log.event_type),
+                "Eski": f"${log.old_value:,.2f}" if log.old_value else "-",
+                "Yeni": f"${log.new_value:,.2f}" if log.new_value else "-",
+                "Fiyat": f"${log.current_price:,.2f}" if log.current_price else "-",
+                "P&L %": f"{log.current_pnl_pct:+.1f}%" if log.current_pnl_pct else "-",
+                "Neden": log.reason or "-",
+            })
+
+        st.dataframe(pd.DataFrame(rows), width="stretch")
+
+
+def _render_portfolio_equity(session):
+    """Portfolio equity curve from PortfolioSnapshot table."""
+    snapshots = (
+        session.query(PortfolioSnapshot)
+        .order_by(PortfolioSnapshot.timestamp)
+        .limit(5000)
+        .all()
+    )
+
+    if not snapshots:
+        st.info("Henuz portfolio snapshot verisi yok. Sistem calismaya basladiktan sonra burada gorunecek.")
+        return
+
+    st.subheader("Portfolio Equity Curve")
+
+    # Metrics from latest snapshot
+    latest = snapshots[-1]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Toplam Equity", f"${latest.total_equity:,.2f}")
+    c2.metric("Nakit", f"${latest.cash_balance:,.2f}")
+    c3.metric("Acik Pozisyon", latest.open_positions)
+    c4.metric("Max DD", f"{latest.max_drawdown_pct:.1f}%")
+
+    # Equity curve chart
+    import plotly.graph_objects as go
+
+    timestamps = [s.timestamp for s in snapshots]
+    equities = [s.total_equity for s in snapshots]
+    unrealized = [s.unrealized_pnl for s in snapshots]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=timestamps, y=equities,
+        mode="lines", name="Equity",
+        line=dict(color="#26a69a", width=2),
+        fill="tozeroy", fillcolor="rgba(38,166,154,0.1)",
+    ))
+    fig.add_trace(go.Scatter(
+        x=timestamps, y=unrealized,
+        mode="lines", name="Unrealized P&L",
+        line=dict(color="#ff9800", width=1, dash="dot"),
+    ))
+
+    fig.update_layout(
+        template="plotly_dark",
+        height=400,
+        title="Portfolio Equity Over Time",
+        xaxis_title="Zaman",
+        yaxis_title="USD",
+        hovermode="x unified",
+    )
+    st.plotly_chart(fig, width="stretch")
+
+    # Regime distribution from latest snapshot
+    if latest.regime_distribution:
+        regime_labels = {
+            "TRENDING_UP": "Yukari Trend",
+            "TRENDING_DOWN": "Asagi Trend",
+            "RANGING": "Yatay",
+            "HIGH_VOLATILITY": "Yuksek Vol.",
+            "LOW_VOLATILITY": "Dusuk Vol.",
+            "BREAKOUT": "Kirilim",
+        }
+        dist = latest.regime_distribution
+        if dist:
+            st.caption("Acik pozisyonlardaki rejim dagilimi:")
+            cols = st.columns(len(dist))
+            for idx, (regime, count) in enumerate(dist.items()):
+                label = regime_labels.get(regime, regime)
+                cols[idx % len(cols)].metric(label, count)

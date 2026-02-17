@@ -1,7 +1,9 @@
 """
-Phalidae v2 - ORM Models (11 tables)
-3 new tables: FundingData, MarketRegimeRecord, CorrelationCache
-Updated columns on: PaperTrade, Signal, CoinConfig, StrategyPerformance
+Phalidae v2 - ORM Models (16 tables)
+Phase 1: AgentJob
+Phase 2: PortfolioSnapshot, TradeManagementLog + PaperTrade new columns
+Phase 4: NewsEvent, ExternalAnalysis
+Phase 5: Signal new columns (confidence_score, eta, invalidation)
 """
 
 from datetime import datetime
@@ -116,10 +118,18 @@ class Signal(Base):
     detected_patterns = Column(JSON, nullable=True)
     reasoning = Column(Text, nullable=True)
 
-    # New: regime + decision trace (Faz 9)
+    # Regime + decision trace
     regime = Column(String(20), nullable=True)
     alternative_signals = Column(JSON, nullable=True)
     rejection_reasons = Column(JSON, nullable=True)
+
+    # Phase 5: confidence scoring, ETA, news risk, invalidation
+    confidence_score = Column(Float, nullable=True)           # 0-100
+    confidence_breakdown = Column(JSON, nullable=True)
+    eta_hours_low = Column(Float, nullable=True)
+    eta_hours_high = Column(Float, nullable=True)
+    news_risk_score = Column(Float, nullable=True)            # 0-1
+    invalidation_note = Column(Text, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
@@ -148,12 +158,20 @@ class PaperTrade(Base):
     max_profit = Column(Float, default=0.0)
     reasoning = Column(Text, nullable=True)
 
-    # New: MFE/MAE, exit reason, trailing stop, regime (Faz 6/7)
-    mfe_pct = Column(Float, default=0.0)          # Maximum Favorable Excursion %
-    mae_pct = Column(Float, default=0.0)           # Maximum Adverse Excursion %
-    exit_reason = Column(String(20), nullable=True)  # TP_HIT/SL_HIT/TRAILING_STOP/TIME_EXPIRED/LIQUIDATED
+    # MFE/MAE, exit reason, trailing stop, regime
+    mfe_pct = Column(Float, default=0.0)
+    mae_pct = Column(Float, default=0.0)
+    exit_reason = Column(String(20), nullable=True)
     trailing_stop_price = Column(Float, nullable=True)
     regime_at_entry = Column(String(20), nullable=True)
+
+    # Phase 2: partial TP tracking + dynamic sizing
+    partial_tp_taken = Column(Boolean, default=False)
+    partial_tp_price = Column(Float, nullable=True)
+    partial_tp_pnl = Column(Float, default=0.0)
+    tp2_price = Column(Float, nullable=True)
+    tp3_price = Column(Float, nullable=True)
+    risk_pct = Column(Float, nullable=True)
 
     opened_at = Column(DateTime, default=datetime.utcnow)
     closed_at = Column(DateTime, nullable=True)
@@ -180,7 +198,7 @@ class CoinConfig(Base):
     id = Column(Integer, primary_key=True)
     symbol = Column(String(30), unique=True, nullable=False)
     best_strategy_id = Column(Integer, ForeignKey("strategy_variants.id"), nullable=True)
-    auto_trade = Column(Boolean, default=False)
+    auto_trade = Column(Boolean, default=True)
 
     # New: per-coin risk settings (Faz 5)
     leverage = Column(Float, default=5.0)
@@ -241,3 +259,100 @@ class CorrelationCache(Base):
     __table_args__ = (
         UniqueConstraint("symbol_a", "symbol_b", name="uix_corr_pair"),
     )
+
+
+# ═══════════════════════════════════════════════════
+# Phase 1: Agent Health
+# ═══════════════════════════════════════════════════
+
+class AgentJob(Base):
+    __tablename__ = "agent_jobs"
+
+    id = Column(Integer, primary_key=True)
+    job_name = Column(String(50), nullable=False, index=True)
+    status = Column(String(15), nullable=False)          # RUNNING, SUCCESS, FAILED
+    started_at = Column(DateTime, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    duration_sec = Column(Float, nullable=True)
+    records_affected = Column(Integer, default=0)
+    error_message = Column(Text, nullable=True)
+    context = Column(JSON, nullable=True)
+
+
+# ═══════════════════════════════════════════════════
+# Phase 2: Portfolio + Trade Management
+# ═══════════════════════════════════════════════════
+
+class PortfolioSnapshot(Base):
+    __tablename__ = "portfolio_snapshots"
+
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, nullable=False, index=True)
+    total_equity = Column(Float, nullable=False)
+    cash_balance = Column(Float, nullable=False)
+    open_positions = Column(Integer, default=0)
+    total_notional = Column(Float, default=0.0)
+    unrealized_pnl = Column(Float, default=0.0)
+    realized_pnl_today = Column(Float, default=0.0)
+    max_drawdown_pct = Column(Float, default=0.0)
+    regime_distribution = Column(JSON, nullable=True)
+
+
+class TradeManagementLog(Base):
+    __tablename__ = "trade_management_log"
+
+    id = Column(Integer, primary_key=True)
+    paper_trade_id = Column(Integer, ForeignKey("paper_trades.id"), nullable=False)
+    timestamp = Column(DateTime, nullable=False)
+    event_type = Column(String(30), nullable=False)
+    old_value = Column(Float, nullable=True)
+    new_value = Column(Float, nullable=True)
+    reason = Column(String(200), nullable=True)
+    current_price = Column(Float, nullable=True)
+    current_pnl_pct = Column(Float, nullable=True)
+
+
+# ═══════════════════════════════════════════════════
+# Phase 4: News + External Analysis
+# ═══════════════════════════════════════════════════
+
+class NewsEvent(Base):
+    __tablename__ = "news_events"
+
+    id = Column(Integer, primary_key=True)
+    source = Column(String(30), nullable=False)
+    external_id = Column(String(100), nullable=True)
+    title = Column(String(500), nullable=False)
+    url = Column(String(500), nullable=True)
+    published_at = Column(DateTime, nullable=False, index=True)
+    symbols = Column(JSON, nullable=True)
+    sentiment = Column(String(10), nullable=True)
+    impact_score = Column(Float, default=0.0)
+    votes_positive = Column(Integer, default=0)
+    votes_negative = Column(Integer, default=0)
+    is_important = Column(Boolean, default=False)
+    fetched_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("source", "external_id", name="uix_news_source_id"),
+    )
+
+
+class ExternalAnalysis(Base):
+    __tablename__ = "external_analyses"
+
+    id = Column(Integer, primary_key=True)
+    symbol = Column(String(30), nullable=True, index=True)
+    source_type = Column(String(30), nullable=False)
+    source_url = Column(String(500), nullable=True)
+    author = Column(String(100), nullable=True)
+    summary = Column(Text, nullable=False)
+    tools_used = Column(JSON, nullable=True)
+    bias_claimed = Column(String(5), nullable=True)
+    target_price = Column(Float, nullable=True)
+    stop_price = Column(Float, nullable=True)
+    outcome = Column(String(15), nullable=True)
+    outcome_notes = Column(Text, nullable=True)
+    lesson_learned = Column(Text, nullable=True)
+    added_at = Column(DateTime, default=datetime.utcnow)
+    verified_at = Column(DateTime, nullable=True)

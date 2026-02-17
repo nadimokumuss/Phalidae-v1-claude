@@ -1,6 +1,8 @@
 """
 Phalidae v2 - Self-Learning Crypto Trading Bot
 Entry point: DB init + Scheduler start + Streamlit multi-page navigation.
+Phase 4: Analysis Library page.
+Phase 5: Global CSS improvements.
 """
 
 import sys
@@ -27,6 +29,29 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# --- Phase 5: Global CSS ---
+st.markdown("""
+<style>
+    /* Metric card font size */
+    [data-testid="stMetricValue"] { font-size: 1.1rem; }
+
+    /* Table row hover */
+    .stDataFrame tbody tr:hover { background-color: rgba(38,166,154,0.1); }
+
+    /* Sidebar styling */
+    [data-testid="stSidebar"] { background-color: #0e1117; }
+
+    /* Divider spacing */
+    hr { margin: 0.5rem 0; }
+
+    /* Progress bar styling */
+    .stProgress > div > div { border-radius: 4px; }
+
+    /* Compact caption */
+    .stCaption { font-size: 0.8rem; }
+</style>
+""", unsafe_allow_html=True)
 
 
 def _init_system():
@@ -70,7 +95,7 @@ st.sidebar.divider()
 
 page = st.sidebar.radio(
     "Sayfa",
-    ["Dashboard", "Sinyaller", "Paper Trades", "Strategy Lab", "Data Explorer"],
+    ["Dashboard", "Sinyaller", "Paper Trades", "Strategy Lab", "Data Explorer", "Analiz Kutuphanesi"],
     index=0,
 )
 
@@ -103,3 +128,6 @@ elif page == "Strategy Lab":
 elif page == "Data Explorer":
     from pages import page_data_explorer
     page_data_explorer.render()
+elif page == "Analiz Kutuphanesi":
+    from pages import page_analysis_library
+    page_analysis_library.render()

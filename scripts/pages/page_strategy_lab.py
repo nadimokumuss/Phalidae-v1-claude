@@ -1,7 +1,9 @@
 """
-Phalidae v2 - Strategy Lab Page
+Phalidae v2 - Strategy Lab Page (Phase 3 + 5)
 Per-coin strategy rankings, variant details, comparison, global leaderboard.
 Includes: regime-based performance breakdown, correlation matrix, regime filters.
+Phase 3: Periodic analysis tab.
+Phase 5: Commentary header.
 """
 
 import streamlit as st
@@ -11,18 +13,20 @@ import numpy as np
 from db.engine import get_session
 from db.models import (
     TrackedSymbol, StrategyVariant, StrategyPerformance, CoinConfig,
-    CorrelationCache,
+    CorrelationCache, OHLCVData,
 )
 from strategy.optimizer import get_top_strategies
 from sqlalchemy import func
+from commentary import generate_page_header
 
 
 def render():
+    generate_page_header("Strategy Lab")
     st.title("Strategy Lab")
     st.caption("Coin bazli strateji siralamasi ve karsilastirma")
 
-    tab_coin, tab_global, tab_detail, tab_corr = st.tabs([
-        "Coin Bazli", "Global Leaderboard", "Varyant Detayi", "Korelasyon"
+    tab_coin, tab_global, tab_detail, tab_corr, tab_periodic = st.tabs([
+        "Coin Bazli", "Global Leaderboard", "Varyant Detayi", "Korelasyon", "Donemsel Analiz"
     ])
 
     with tab_coin:
@@ -33,6 +37,8 @@ def render():
         _render_variant_detail()
     with tab_corr:
         _render_correlation_matrix()
+    with tab_periodic:
+        _render_periodic_analysis()
 
 
 def _render_coin_strategies():
@@ -338,3 +344,134 @@ def _render_correlation_matrix():
             a = c.symbol_a.replace("/USDT:USDT", "")
             b = c.symbol_b.replace("/USDT:USDT", "")
             st.caption(f"  {a} <-> {b}: {c.correlation:.3f}")
+
+
+def _render_periodic_analysis():
+    """Phase 3: Period-based performance analysis with quarter breakdown."""
+    session = get_session()
+    try:
+        symbols = (
+            session.query(TrackedSymbol)
+            .filter_by(is_active=True)
+            .order_by(TrackedSymbol.rank)
+            .all()
+        )
+        sym_list = [s.symbol for s in symbols]
+        sym_labels = [s.symbol.replace("/USDT:USDT", "") for s in symbols]
+    finally:
+        session.close()
+
+    if not sym_list:
+        st.info("Henuz takip edilen coin yok.")
+        return
+
+    st.subheader("Donemsel Performans Analizi")
+    st.caption("Stratejilerin farkli zaman dilimlerindeki performansini karsilastirin")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        sel_idx = st.selectbox("Coin:", range(len(sym_list)),
+                               format_func=lambda i: sym_labels[i], key="periodic_coin")
+        symbol = sym_list[sel_idx]
+    with c2:
+        period = st.selectbox("Donem:", ["Son 30 gun", "Son 90 gun", "Son 180 gun", "Son 1 yil"], key="periodic_period")
+
+    # Calculate period in days
+    period_days = {"Son 30 gun": 30, "Son 90 gun": 90, "Son 180 gun": 180, "Son 1 yil": 365}[period]
+
+    session = get_session()
+    try:
+        # Get strategies for this symbol
+        perfs = (
+            session.query(StrategyPerformance)
+            .filter_by(symbol=symbol)
+            .filter(StrategyPerformance.total_trades >= 5)
+            .order_by(StrategyPerformance.composite_score.desc())
+            .limit(10)
+            .all()
+        )
+
+        if not perfs:
+            st.info("Bu coin icin yeterli strateji verisi yok.")
+            return
+
+        # Show strategies with their updated_at info
+        rows = []
+        for p in perfs:
+            variant = session.query(StrategyVariant).get(p.strategy_variant_id)
+            name = variant.name[:40] if variant else f"Variant #{p.strategy_variant_id}"
+
+            rows.append({
+                "Strateji": name,
+                "Skor": f"{p.composite_score:.4f}",
+                "WR": f"{p.win_rate * 100:.1f}%",
+                "PF": f"{p.profit_factor:.2f}",
+                "P&L": f"{p.total_pnl_pct:+.1f}%",
+                "Trade": p.total_trades,
+                "Trend WR": f"{p.regime_trending_score * 100:.0f}%" if p.regime_trending_score else "-",
+                "Yatay WR": f"{p.regime_ranging_score * 100:.0f}%" if p.regime_ranging_score else "-",
+                "Volatil WR": f"{p.regime_volatile_score * 100:.0f}%" if p.regime_volatile_score else "-",
+                "Paper": f"{p.paper_win_rate * 100:.0f}% ({p.paper_total})" if p.paper_total > 0 else "-",
+                "Son Guncelleme": p.updated_at.strftime("%Y-%m-%d") if p.updated_at else "-",
+            })
+
+        st.dataframe(pd.DataFrame(rows), width="stretch")
+
+        # Regime distribution for this coin's data
+        from db.models import MarketRegimeRecord
+        from datetime import datetime, timedelta
+
+        cutoff = datetime.utcnow() - timedelta(days=period_days)
+        regimes = (
+            session.query(
+                MarketRegimeRecord.regime_label,
+                func.count().label("cnt"),
+            )
+            .filter(
+                MarketRegimeRecord.symbol == symbol,
+                MarketRegimeRecord.timestamp >= cutoff,
+            )
+            .group_by(MarketRegimeRecord.regime_label)
+            .all()
+        )
+
+        if regimes:
+            st.subheader(f"Rejim Dagilimi ({period})")
+
+            regime_labels = {
+                "TRENDING_UP": "Yukari Trend",
+                "TRENDING_DOWN": "Asagi Trend",
+                "RANGING": "Yatay",
+                "HIGH_VOLATILITY": "Yuksek Vol.",
+                "LOW_VOLATILITY": "Dusuk Vol.",
+                "BREAKOUT": "Kirilim",
+            }
+
+            import plotly.graph_objects as go
+
+            labels = [regime_labels.get(r.regime_label, r.regime_label) for r in regimes]
+            values = [r.cnt for r in regimes]
+            colors = ["#26a69a", "#ef5350", "#ff9800", "#e91e63", "#9c27b0", "#2196f3"]
+
+            fig = go.Figure(data=[go.Pie(
+                labels=labels, values=values,
+                hole=0.4,
+                marker_colors=colors[:len(labels)],
+            )])
+            fig.update_layout(
+                template="plotly_dark",
+                height=350,
+                title=f"{sym_labels[sel_idx]} - Rejim Dagilimi ({period})",
+            )
+            st.plotly_chart(fig, width="stretch")
+
+        # Data depth info
+        candle_count = (
+            session.query(func.count(OHLCVData.id))
+            .filter_by(symbol=symbol, timeframe="4h")
+            .scalar()
+        ) or 0
+        st.caption(f"4h veri derinligi: {candle_count} mum (~{candle_count * 4 / 24:.0f} gun)")
+
+    finally:
+        session.close()

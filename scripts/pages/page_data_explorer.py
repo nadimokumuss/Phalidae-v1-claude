@@ -1,6 +1,7 @@
 """
-Phalidae v2 - Data Explorer Page
+Phalidae v2 - Data Explorer Page (Phase 5)
 Raw OHLCV viewer, data coverage matrix, indicator overlay chart.
+Phase 5: Commentary header.
 """
 
 import streamlit as st
@@ -11,9 +12,11 @@ from db.models import TrackedSymbol, OHLCVData
 from sqlalchemy import func
 from worker.collector import get_ohlcv_df
 from charting import plot_interactive_chart
+from commentary import generate_page_header
 
 
 def render():
+    generate_page_header("Data Explorer")
     st.title("Data Explorer")
     st.caption("Ham veri goruntuleyici ve kapsam matrisi")
 

@@ -1,13 +1,18 @@
 """
 Phalidae v2 - APScheduler Setup
 Background jobs running in a daemon thread alongside Streamlit.
+Phase 1: Quick optimize job.
+Phase 3: Deep backfill daily job.
+Phase 4: News collector job.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.date import DateTrigger
+from apscheduler.triggers.cron import CronTrigger
 
 logger = logging.getLogger("phalidae.scheduler")
 
@@ -47,6 +52,14 @@ def _job_optimize():
         logger.error(f"Optimizer job error: {e}")
 
 
+def _job_quick_optimize():
+    from strategy.optimizer import run_quick_optimization
+    try:
+        run_quick_optimization(top_symbols=10, top_variants=50)
+    except Exception as e:
+        logger.error(f"Quick optimizer job error: {e}")
+
+
 def _job_market_data():
     from worker.collector import collect_market_data, collect_regime_data
     try:
@@ -62,6 +75,32 @@ def _job_refresh_symbols():
         refresh_tracked_symbols(top_n=50)
     except Exception as e:
         logger.error(f"Symbol refresh job error: {e}")
+
+
+def _job_deep_backfill():
+    from worker.collector import deep_backfill_job
+    try:
+        deep_backfill_job()
+    except Exception as e:
+        logger.error(f"Deep backfill job error: {e}")
+
+
+def _job_collect_news():
+    try:
+        from worker.news_collector import collect_news
+        collect_news()
+    except ImportError:
+        pass  # News module not available yet (Phase 4)
+    except Exception as e:
+        logger.error(f"News collector job error: {e}")
+
+
+def _job_portfolio_snapshot():
+    try:
+        from paper_trader.portfolio import record_portfolio_snapshot
+        record_portfolio_snapshot()
+    except Exception as e:
+        logger.error(f"Portfolio snapshot job error: {e}")
 
 
 def start_scheduler():
@@ -133,9 +172,49 @@ def start_scheduler():
         max_instances=1,
     )
 
+    # Phase 1: Quick optimization - runs once, 3 minutes after startup
+    _scheduler.add_job(
+        _job_quick_optimize,
+        trigger=DateTrigger(run_date=datetime.utcnow() + timedelta(minutes=3)),
+        id="quick_optimizer",
+        name="Quick Optimizer (startup)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # Phase 3: Deep Backfill - daily at 02:00 UTC
+    _scheduler.add_job(
+        _job_deep_backfill,
+        trigger=CronTrigger(hour=2, minute=0),
+        id="deep_backfill",
+        name="Deep Backfill Daily",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # Phase 4: News Collector - every 15 minutes
+    _scheduler.add_job(
+        _job_collect_news,
+        trigger=IntervalTrigger(minutes=15),
+        id="news_collector",
+        name="News Collector",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # Phase 2: Portfolio Snapshot - every 5 minutes (with trade checker)
+    _scheduler.add_job(
+        _job_portfolio_snapshot,
+        trigger=IntervalTrigger(minutes=5),
+        id="portfolio_snapshot",
+        name="Portfolio Snapshot",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     _scheduler.start()
     _started = True
-    logger.info("Scheduler started with 6 jobs")
+    logger.info("Scheduler started with 10 jobs")
     return _scheduler
 
 

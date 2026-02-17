@@ -3,6 +3,8 @@ from db.models import (
     OHLCVData, TrackedSymbol, StrategyVariant, StrategyPerformance,
     Signal, PaperTrade, TradeSnapshot, CoinConfig,
     FundingData, MarketRegimeRecord, CorrelationCache,
+    AgentJob, PortfolioSnapshot, TradeManagementLog,
+    NewsEvent, ExternalAnalysis,
 )
 
 __all__ = [
@@ -10,4 +12,6 @@ __all__ = [
     "OHLCVData", "TrackedSymbol", "StrategyVariant", "StrategyPerformance",
     "Signal", "PaperTrade", "TradeSnapshot", "CoinConfig",
     "FundingData", "MarketRegimeRecord", "CorrelationCache",
+    "AgentJob", "PortfolioSnapshot", "TradeManagementLog",
+    "NewsEvent", "ExternalAnalysis",
 ]

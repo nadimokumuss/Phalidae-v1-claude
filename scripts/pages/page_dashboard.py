@@ -1,20 +1,24 @@
 """
 Phalidae v2 - Dashboard Page
 System status, data coverage, active trades summary, best strategies per coin.
-Includes: regime display, funding rate table, daily P&L tracker.
+Phase 1: Agent Health panel.
+Phase 2: Portfolio overview.
+Phase 4: Market news section.
+Phase 5: Commentary header.
 """
 
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from db.engine import get_session
 from db.models import (
     OHLCVData, TrackedSymbol, PaperTrade, StrategyVariant,
     StrategyPerformance, CoinConfig, Signal, FundingData,
-    MarketRegimeRecord,
+    MarketRegimeRecord, AgentJob,
 )
-from sqlalchemy import func, text
+from sqlalchemy import func, text, and_
+from commentary import generate_page_header
 
 REGIME_COLORS = {
     "TRENDING_UP": "#26a69a",
@@ -34,10 +38,24 @@ REGIME_LABELS = {
     "BREAKOUT": "Kirilim",
 }
 
+JOB_INTERVALS = {
+    "collector": 5,
+    "analyzer": 15,
+    "trade_checker": 5,
+    "optimizer": 360,
+    "market_data": 15,
+    "symbol_refresh": 1440,
+    "news_collector": 15,
+}
+
 
 def render():
+    generate_page_header("Dashboard")
     st.title("Dashboard")
     st.caption("Sistem durumu, veri kapsami ve performans ozeti")
+
+    # --- Portfolio Overview (Phase 2) ---
+    _render_portfolio_overview()
 
     # --- System Status ---
     col1, col2, col3, col4 = st.columns(4)
@@ -72,8 +90,18 @@ def render():
 
         st.divider()
 
+        # --- Agent Health Panel (Phase 1) ---
+        _render_agent_health(session)
+
+        st.divider()
+
         # --- Daily P&L Tracker ---
         _render_daily_pnl(session)
+
+        st.divider()
+
+        # --- Market News (Phase 4) ---
+        _render_market_news()
 
         st.divider()
 
@@ -143,7 +171,8 @@ def render():
                 rows.append({
                     "Coin": config.symbol.replace("/USDT:USDT", ""),
                     "Strateji": variant.name[:40],
-                    "Kaldırac": f"{config.leverage:.0f}x",
+                    "Kaldirac": f"{config.leverage:.0f}x",
+                    "Auto": "Evet" if config.auto_trade else "Hayir",
                     "Win Rate": f"{(perf.win_rate * 100):.1f}%" if perf else "-",
                     "Profit Factor": f"{perf.profit_factor:.2f}" if perf else "-",
                     "Sharpe": f"{perf.sharpe_ratio:.2f}" if perf else "-",
@@ -169,8 +198,10 @@ def render():
                     "TP": f"${t.tp_price:,.2f}" if t.tp_price else "-",
                     "SL": f"${t.sl_price:,.2f}" if t.sl_price else "-",
                     "Trail SL": f"${t.trailing_stop_price:,.2f}" if t.trailing_stop_price else "-",
+                    "Boyut": f"${t.position_size_usd:,.0f}",
                     "Max Profit": f"{t.max_profit:+.1f}%",
                     "Max DD": f"{t.max_drawdown:+.1f}%",
+                    "Partial TP": "Evet" if t.partial_tp_taken else "Hayir",
                     "Rejim": REGIME_LABELS.get(t.regime_at_entry, "-"),
                     "Acilis": t.opened_at.strftime("%m-%d %H:%M") if t.opened_at else "-",
                 })
@@ -178,6 +209,128 @@ def render():
 
     finally:
         session.close()
+
+
+def _render_portfolio_overview():
+    """Phase 2: Portfolio metrics at top of dashboard."""
+    try:
+        from paper_trader.portfolio import get_portfolio_summary
+        ps = get_portfolio_summary()
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Portfolio Degeri", f"${ps['equity']:,.2f}",
+                   delta=f"{ps['total_pnl_pct']:+.1f}%")
+        c2.metric("Nakit", f"${ps['cash']:,.2f}")
+        c3.metric("Exposure", f"{ps['exposure_pct']:.1f}%")
+        c4.metric("Gunluk P&L", f"${ps['daily_pnl']:+,.2f}")
+        c5.metric("Acik Pozisyon", ps['open_positions'])
+        st.divider()
+    except Exception:
+        pass
+
+
+def _render_agent_health(session):
+    """Phase 1: Agent health monitoring panel."""
+    st.subheader("Agent Durumu")
+
+    job_names = ["collector", "analyzer", "trade_checker", "optimizer", "market_data", "symbol_refresh", "news_collector"]
+    job_labels = {
+        "collector": "Collector",
+        "analyzer": "Analyzer",
+        "trade_checker": "Trade Check",
+        "optimizer": "Optimizer",
+        "market_data": "Market Data",
+        "symbol_refresh": "Sym Refresh",
+        "news_collector": "News",
+    }
+
+    now = datetime.utcnow()
+    rows = []
+
+    for job_name in job_names:
+        # Get last 3 runs
+        recent = (
+            session.query(AgentJob)
+            .filter_by(job_name=job_name)
+            .order_by(AgentJob.started_at.desc())
+            .limit(3)
+            .all()
+        )
+
+        if not recent:
+            rows.append({
+                "Job": job_labels.get(job_name, job_name),
+                "Durum": "Bekleniyor",
+                "Son Calisma": "-",
+                "Sure": "-",
+                "Kayit": "-",
+            })
+            continue
+
+        last = recent[0]
+        # Status color
+        interval_min = JOB_INTERVALS.get(job_name, 60)
+        if last.completed_at:
+            age_min = (now - last.completed_at).total_seconds() / 60
+        else:
+            age_min = (now - last.started_at).total_seconds() / 60
+
+        if last.status == "FAILED":
+            status = "HATA"
+        elif last.status == "RUNNING":
+            status = "Calisiyor"
+        elif age_min > interval_min * 3:
+            status = "Eski"
+        else:
+            status = "Aktif"
+
+        # Age display
+        if last.completed_at:
+            delta = now - last.completed_at
+            if delta.total_seconds() < 3600:
+                age_str = f"{delta.total_seconds() / 60:.0f} dk once"
+            else:
+                age_str = f"{delta.total_seconds() / 3600:.1f} sa once"
+        else:
+            age_str = "Calisir"
+
+        rows.append({
+            "Job": job_labels.get(job_name, job_name),
+            "Durum": status,
+            "Son Calisma": age_str,
+            "Sure": f"{last.duration_sec:.1f}s" if last.duration_sec else "-",
+            "Kayit": str(last.records_affected or 0),
+        })
+
+    df = pd.DataFrame(rows)
+
+    # Color the status column
+    def _color_status(val):
+        if val == "Aktif":
+            return "color: #26a69a"
+        elif val == "HATA":
+            return "color: #ef5350; font-weight: bold"
+        elif val == "Eski":
+            return "color: #ff7043"
+        elif val == "Calisiyor":
+            return "color: #42a5f5"
+        return "color: #ffca28"
+
+    styled = df.style.map(_color_status, subset=["Durum"])
+    st.dataframe(styled, width="stretch", height=280)
+
+    # Summary stats
+    last_24h = now - timedelta(hours=24)
+    success_count = session.query(func.count(AgentJob.id)).filter(
+        AgentJob.status == "SUCCESS",
+        AgentJob.started_at >= last_24h,
+    ).scalar() or 0
+    fail_count = session.query(func.count(AgentJob.id)).filter(
+        AgentJob.status == "FAILED",
+        AgentJob.started_at >= last_24h,
+    ).scalar() or 0
+
+    st.caption(f"Son 24 saat: {success_count} basarili, {fail_count} hatali")
 
 
 def _render_daily_pnl(session):
@@ -206,7 +359,6 @@ def _render_daily_pnl(session):
         c3.metric("Bugun Islem", len(today_trades))
         c4.metric("Bugun Win", today_wins)
 
-        # Drawdown warning bar
         if today_pnl_pct < -5:
             st.warning(f"Gunluk kayip: {today_pnl_pct:.1f}% - Drawdown limitine yaklasiliyor!")
         if today_pnl_pct < -10:
@@ -215,12 +367,30 @@ def _render_daily_pnl(session):
         st.caption("Bugun kapanan islem yok.")
 
 
+def _render_market_news():
+    """Phase 4: Show today's market news."""
+    try:
+        from worker.news_collector import get_todays_events
+        events = get_todays_events(limit=10)
+    except (ImportError, Exception):
+        events = []
+
+    st.subheader("Piyasa Haberleri")
+
+    if not events:
+        st.caption("Haber verisi henuz mevcut degil. CRYPTOPANIC_API_KEY ayarlandiginda gorunecek.")
+        return
+
+    for e in events:
+        sentiment_icon = {"bullish": "🟢", "bearish": "🔴", "neutral": "⚪"}.get(e["sentiment"], "⚪")
+        symbols_str = ", ".join(e["symbols"][:5]) if e["symbols"] else ""
+        important = " ⭐" if e["is_important"] else ""
+        st.caption(f"{sentiment_icon} {e['published_at']} | {symbols_str} | {e['title'][:100]}{important}")
+
+
 def _render_regime_map(session):
     """Show current regime for each active coin."""
     st.subheader("Piyasa Rejimleri")
-
-    # Get latest regime for each symbol
-    from sqlalchemy import and_
 
     subq = (
         session.query(
@@ -241,7 +411,6 @@ def _render_regime_map(session):
     )
 
     if regimes:
-        # Display as colored chips
         cols = st.columns(6)
         for i, r in enumerate(regimes):
             col = cols[i % 6]
@@ -260,9 +429,6 @@ def _render_regime_map(session):
 def _render_funding_table(session):
     """Show latest funding rates for tracked symbols."""
     st.subheader("Funding Rate & Open Interest")
-
-    # Get latest funding data for each symbol
-    from sqlalchemy import and_
 
     subq = (
         session.query(
