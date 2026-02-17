@@ -380,20 +380,48 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
     from signal_generator import calculate_multi_tp
     multi_tp = calculate_multi_tp(entry_price, atr, bias)
 
-    # Dedup: skip if same symbol+bias signal exists within last 2 hours
+    # --- Smart Dedup: position-aware signal deduplication ---
     session = get_session()
     try:
-        recent_dup = (
-            session.query(Signal)
+        # 1) If there's an OPEN paper trade for this symbol with same bias, skip entirely
+        open_trade = (
+            session.query(PaperTrade)
             .filter(
-                Signal.symbol == symbol,
-                Signal.bias == bias,
-                Signal.created_at >= datetime.utcnow() - timedelta(hours=2),
+                PaperTrade.symbol == symbol,
+                PaperTrade.bias == bias,
+                PaperTrade.status == "OPEN",
             )
             .first()
         )
-        if recent_dup:
+        if open_trade:
+            logger.debug(f"Dedup: {symbol} {bias} skipped — open trade #{open_trade.id} exists")
             return False
+
+        # 2) Check most recent signal for this symbol (any bias)
+        last_signal = (
+            session.query(Signal)
+            .filter(Signal.symbol == symbol)
+            .order_by(Signal.created_at.desc())
+            .first()
+        )
+        if last_signal:
+            # Same bias — only allow if entry price moved >3% from last signal
+            if last_signal.bias == bias:
+                price_change = abs(entry_price - last_signal.entry_price) / last_signal.entry_price
+                if price_change < 0.03:
+                    logger.debug(
+                        f"Dedup: {symbol} {bias} skipped — same bias, price change only {price_change:.1%} "
+                        f"(need >3%)"
+                    )
+                    return False
+                logger.info(
+                    f"Dedup: {symbol} {bias} NEW signal — price moved {price_change:.1%} from last"
+                )
+            else:
+                # Bias flipped (LONG→SHORT or SHORT→LONG) — always allow
+                logger.info(
+                    f"Dedup: {symbol} bias flipped {last_signal.bias}→{bias}, generating new signal"
+                )
     finally:
         session.close()
 
