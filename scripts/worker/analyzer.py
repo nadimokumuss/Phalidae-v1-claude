@@ -115,10 +115,9 @@ def _assign_fallback_strategies():
 
 def run_analysis_cycle():
     """
-    Main analysis loop (called by scheduler every 15 min):
-    For each active symbol that has a best_strategy assigned,
-    generate a signal and optionally open a paper trade.
-    Phase 1: Agent health logging + fallback strategy assignment.
+    Main analysis loop (called by scheduler every 5 min):
+    For each active symbol, generate a signal using all resources.
+    Strategy variant is optional — if assigned, used for optimizer learning.
     """
     job_id = _start_agent_job("analyzer")
     signals_created = 0
@@ -132,16 +131,18 @@ def run_analysis_cycle():
 
         session = get_session()
         try:
+            # LEFT OUTER JOIN: analyze ALL coins, even without a strategy
             configs = (
                 session.query(CoinConfig, StrategyVariant)
-                .join(StrategyVariant, CoinConfig.best_strategy_id == StrategyVariant.id)
+                .outerjoin(StrategyVariant, CoinConfig.best_strategy_id == StrategyVariant.id)
+                .filter(CoinConfig.auto_trade.is_(True))
                 .all()
             )
         finally:
             session.close()
 
         if not configs:
-            logger.info("No coin configs with best strategy yet")
+            logger.info("No active coin configs found")
             _finish_agent_job(job_id, "SUCCESS", 0, context={"reason": "no_configs"})
             return
 
@@ -170,7 +171,7 @@ def _get_news_risk(symbol: str) -> float:
         return 0.0
 
 
-def _analyze_single(config: CoinConfig, variant: StrategyVariant) -> bool:
+def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool:
     """Analyze a single symbol with multi-TF, all indicators, and full scoring. Returns True if signal created."""
     symbol = config.symbol
 
@@ -258,7 +259,7 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant) -> bool:
 
     # Try regime-specific strategy first, fallback to general best
     best_variant = variant
-    selected_variant_id = variant.id
+    selected_variant_id = variant.id if variant else None
 
     session = get_session()
     try:
@@ -270,7 +271,7 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant) -> bool:
         session.close()
 
     # Strategy-specific scores for optimizer learning (tracked separately)
-    composition = best_variant.composition
+    composition = best_variant.composition if best_variant else {}
     keys = []
     for cat in ["trend", "entry", "volume", "volatility"]:
         keys.extend(composition.get(cat, []))
@@ -309,17 +310,18 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant) -> bool:
 
     # Get backtest win rate for this strategy
     backtest_wr = 0.0
-    session = get_session()
-    try:
-        perf = (
-            session.query(StrategyPerformance)
-            .filter_by(strategy_variant_id=selected_variant_id, symbol=symbol)
-            .first()
-        )
-        if perf:
-            backtest_wr = perf.win_rate or 0.0
-    finally:
-        session.close()
+    if selected_variant_id:
+        session = get_session()
+        try:
+            perf = (
+                session.query(StrategyPerformance)
+                .filter_by(strategy_variant_id=selected_variant_id, symbol=symbol)
+                .first()
+            )
+            if perf:
+                backtest_wr = perf.win_rate or 0.0
+        finally:
+            session.close()
 
     # Use full all_scores from 4h for confidence calculation
     all_indicator_scores = primary["all_scores"]["scores"]
@@ -564,15 +566,18 @@ def _evaluate_alternatives(
 
     session = get_session()
     try:
-        top_perfs = (
+        query = (
             session.query(StrategyPerformance, StrategyVariant)
             .join(StrategyVariant, StrategyPerformance.strategy_variant_id == StrategyVariant.id)
             .filter(
                 StrategyPerformance.symbol == symbol,
                 StrategyPerformance.composite_score > 0,
-                StrategyVariant.id != selected_variant_id,
             )
-            .order_by(StrategyPerformance.composite_score.desc())
+        )
+        if selected_variant_id is not None:
+            query = query.filter(StrategyVariant.id != selected_variant_id)
+        top_perfs = (
+            query.order_by(StrategyPerformance.composite_score.desc())
             .limit(3)
             .all()
         )
