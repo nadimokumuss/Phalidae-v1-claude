@@ -200,10 +200,10 @@ def start_scheduler():
         next_run_time=now + timedelta(seconds=45),  # 45s after start
     )
 
-    # Signal Analyzer - every 15 minutes
+    # Signal Analyzer - every 5 minutes
     _scheduler.add_job(
         _job_analyze,
-        trigger=IntervalTrigger(minutes=15),
+        trigger=IntervalTrigger(minutes=5),
         id="analyzer",
         name="Signal Analyzer",
         replace_existing=True,
