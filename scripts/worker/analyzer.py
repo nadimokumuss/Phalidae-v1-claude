@@ -7,7 +7,7 @@ Phase 5: Enhanced decision trace + confidence scoring.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import ccxt
 import pandas as pd
@@ -360,13 +360,13 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
     # ETA estimation
     eta_low, eta_high = estimate_time_to_target(symbol, bias, entry_price, tp_sl["tp"])
 
-    # Confidence label (legacy compat)
+    # Confidence label (ASCII for DB/filter compatibility)
     if conf_score >= 75:
-        confidence = "YÜKSEK"
+        confidence = "YUKSEK"
     elif conf_score >= 50:
         confidence = "ORTA"
     else:
-        confidence = "DÜŞÜK"
+        confidence = "DUSUK"
 
     # Invalidation note
     invalidation = _generate_invalidation(bias, entry_price, tp_sl["sl"], atr)
@@ -379,6 +379,23 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
     # Multi-TP calculation (Phase 2)
     from signal_generator import calculate_multi_tp
     multi_tp = calculate_multi_tp(entry_price, atr, bias)
+
+    # Dedup: skip if same symbol+bias signal exists within last 2 hours
+    session = get_session()
+    try:
+        recent_dup = (
+            session.query(Signal)
+            .filter(
+                Signal.symbol == symbol,
+                Signal.bias == bias,
+                Signal.created_at >= datetime.utcnow() - timedelta(hours=2),
+            )
+            .first()
+        )
+        if recent_dup:
+            return False
+    finally:
+        session.close()
 
     # Save signal to DB (convert all numpy types to native Python for PostgreSQL)
     raw_scores = strategy_result["scores"] if strategy_result else all_indicator_scores
@@ -439,7 +456,7 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
         session.close()
 
     # Auto paper trade if configured
-    if config.auto_trade and confidence in ("YÜKSEK", "ORTA"):
+    if config.auto_trade and confidence in ("YUKSEK", "ORTA"):
         # Reduce position size if news risk is high
         position_size_override = None
         if news_risk > 0.7:

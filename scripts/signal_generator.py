@@ -260,11 +260,11 @@ def analyze_symbol(
     # Güven seviyesi
     abs_score = abs(final_score)
     if abs_score >= 6:
-        confidence = "YÜKSEK"
+        confidence = "YUKSEK"
     elif abs_score >= 4:
         confidence = "ORTA"
     else:
-        confidence = "DÜŞÜK"
+        confidence = "DUSUK"
 
     entry = primary["last_close"]
     atr = primary["atr"]
@@ -439,11 +439,11 @@ def analyze_symbol_with_strategy(
 
     abs_score = abs(total_score)
     if abs_score >= 6:
-        confidence = "YÜKSEK"
+        confidence = "YUKSEK"
     elif abs_score >= 4:
         confidence = "ORTA"
     else:
-        confidence = "DÜŞÜK"
+        confidence = "DUSUK"
 
     return {
         "symbol": symbol,

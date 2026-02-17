@@ -46,9 +46,9 @@ def _render_db_signals():
     with col1:
         bias_f = st.multiselect("Yon", ["LONG", "SHORT"], default=["LONG", "SHORT"])
     with col2:
-        conf_f = st.multiselect("Guven", ["YUKSEK", "ORTA", "DUSUK"], default=["YUKSEK", "ORTA"])
+        conf_f = st.multiselect("Guven", ["YUKSEK", "ORTA", "DUSUK"], default=["YUKSEK", "ORTA", "DUSUK"])
     with col3:
-        min_score = st.slider("Min |Skor|", 0.0, 10.0, 2.5, 0.5)
+        min_score = st.slider("Min |Skor|", 0.0, 10.0, 0.0, 0.5)
     with col4:
         min_conf_score = st.slider("Min Guven Skoru", 0, 100, 0, 5)
 
@@ -66,6 +66,7 @@ def _render_db_signals():
         conf_score = s.get("confidence_score")
         eta_low = s.get("eta_hours_low")
         eta_high = s.get("eta_hours_high")
+        bd = s.get("score_breakdown") or {}
         rows.append({
             "Coin": cn,
             "Yon": s["bias"],
@@ -74,10 +75,13 @@ def _render_db_signals():
             "SL ($)": s.get("sl"),
             "R:R": s.get("rr_ratio"),
             "Guven": s.get("confidence", ""),
-            "Skor (0-100)": f"{conf_score:.0f}" if conf_score else "-",
+            "Guven (0-100)": f"{conf_score:.0f}" if conf_score else "-",
             "Skor": s.get("score", 0),
-            "ETA": f"{eta_low:.0f}-{eta_high:.0f}s" if eta_low and eta_high else "-",
-            "Strateji": s.get("strategy_name", ""),
+            "Ind.": bd.get("indicators", 0),
+            "Form.": bd.get("patterns", 0),
+            "Chart": bd.get("chart_patterns", 0),
+            "Trend": bd.get("trend_lines", 0),
+            "Regime": s.get("regime", ""),
             "Zaman": s.get("created_at", "")[:16],
         })
 
@@ -87,9 +91,10 @@ def _render_db_signals():
             df_sig.style.format({
                 "Entry ($)": "${:,.2f}", "TP ($)": "${:,.2f}", "SL ($)": "${:,.2f}",
                 "R:R": "{:.2f}", "Skor": "{:+.1f}",
+                "Ind.": "{:+.2f}", "Form.": "{:+.2f}", "Chart": "{:+.2f}", "Trend": "{:+.2f}",
             }),
             width="stretch",
-            height=400,
+            height=450,
         )
 
         # Detail view
