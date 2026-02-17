@@ -80,7 +80,9 @@ def _finish_agent_job(job_id: int, status: str, records: int = 0, error: str = N
 
 
 def refresh_tracked_symbols(top_n: int = 50):
-    """Update tracked symbols list based on volume ranking."""
+    """Update tracked symbols list based on volume ranking.
+    Auto-backfills newly added symbols so indicators have enough bars.
+    """
     exchange = _get_exchange()
     try:
         tickers = exchange.fetch_tickers()
@@ -95,6 +97,7 @@ def refresh_tracked_symbols(top_n: int = 50):
     usdt_pairs.sort(key=lambda x: x[1], reverse=True)
     top_symbols = usdt_pairs[:top_n]
 
+    new_symbols = []
     session = get_session()
     try:
         # Deactivate all first
@@ -107,14 +110,25 @@ def refresh_tracked_symbols(top_n: int = 50):
                 existing.is_active = True
             else:
                 session.add(TrackedSymbol(symbol=sym, rank=rank, is_active=True))
+                new_symbols.append(sym)
 
         session.commit()
-        logger.info(f"Refreshed {len(top_symbols)} tracked symbols")
+        logger.info(f"Refreshed {len(top_symbols)} tracked symbols ({len(new_symbols)} new)")
     except Exception as e:
         session.rollback()
         logger.error(f"Symbol refresh error: {e}")
+        return
     finally:
         session.close()
+
+    # Auto-backfill newly added symbols
+    if new_symbols:
+        logger.info(f"Backfilling {len(new_symbols)} new symbols...")
+        for sym in new_symbols:
+            try:
+                backfill_symbol(sym)
+            except Exception as e:
+                logger.error(f"Backfill error for {sym}: {e}")
 
 
 def _fetch_with_retry(symbol: str, timeframe: str, limit: int = 200, since_ms: int = None, retries: int = 3):

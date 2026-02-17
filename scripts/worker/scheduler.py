@@ -120,19 +120,48 @@ def _bootstrap():
             logger.info("Bootstrap: no symbols found, running refresh_tracked_symbols...")
             _job_refresh_symbols()
 
-        # Step 2: Run first collection immediately
+        # Step 2: Backfill any symbols with insufficient data (<200 bars on 4h)
+        logger.info("Bootstrap: checking for under-filled symbols...")
+        try:
+            from db.models import OHLCVData
+            from sqlalchemy import func
+            from worker.collector import backfill_symbol
+            s = get_session()
+            try:
+                bar_counts = (
+                    s.query(TrackedSymbol.symbol, func.count(OHLCVData.id))
+                    .outerjoin(OHLCVData, (TrackedSymbol.symbol == OHLCVData.symbol) & (OHLCVData.timeframe == '4h'))
+                    .filter(TrackedSymbol.is_active.is_(True))
+                    .group_by(TrackedSymbol.symbol)
+                    .all()
+                )
+            finally:
+                s.close()
+            underfilled = [sym for sym, cnt in bar_counts if cnt < 200]
+            if underfilled:
+                logger.info(f"Bootstrap: backfilling {len(underfilled)} under-filled symbols...")
+                for sym in underfilled:
+                    try:
+                        backfill_symbol(sym)
+                    except Exception as e:
+                        logger.error(f"Bootstrap backfill error for {sym}: {e}")
+                logger.info(f"Bootstrap: backfill complete for {len(underfilled)} symbols")
+        except Exception as e:
+            logger.error(f"Bootstrap backfill check error: {e}")
+
+        # Step 3: Run first collection immediately
         logger.info("Bootstrap: running initial collector...")
         _job_collect()
 
-        # Step 3: Run market data + regime
+        # Step 4: Run market data + regime
         logger.info("Bootstrap: running initial market data...")
         _job_market_data()
 
-        # Step 4: Run news collector
+        # Step 5: Run news collector
         logger.info("Bootstrap: running initial news collection...")
         _job_collect_news()
 
-        # Step 5: News backfill if table is nearly empty
+        # Step 6: News backfill if table is nearly empty
         try:
             from db.models import NewsEvent
             s = get_session()
