@@ -36,8 +36,17 @@ def collect_news():
     """Fetch latest news from CryptoPanic. Called every 15 minutes."""
     api_key = os.environ.get("CRYPTOPANIC_API_KEY", "")
     if not api_key:
-        logger.warning("CRYPTOPANIC_API_KEY not set, skipping news collection")
+        logger.info("CRYPTOPANIC_API_KEY not set, skipping news collection")
         return
+
+    # Quick availability check before starting agent job
+    try:
+        probe = requests.head(CRYPTOPANIC_URL, timeout=5)
+        if probe.status_code == 404:
+            logger.info("CryptoPanic API unavailable (404), skipping")
+            return
+    except requests.RequestException:
+        pass  # Network error, try full request anyway
 
     job_id = _start_agent_job("news_collector")
     collected = 0
