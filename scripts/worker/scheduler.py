@@ -132,6 +132,25 @@ def _bootstrap():
         logger.info("Bootstrap: running initial news collection...")
         _job_collect_news()
 
+        # Step 5: News backfill if table is nearly empty
+        try:
+            from db.models import NewsEvent
+            s = get_session()
+            try:
+                news_count = s.query(NewsEvent).count()
+            finally:
+                s.close()
+        except Exception:
+            news_count = 0
+
+        if news_count < 50:
+            logger.info(f"Bootstrap: news table has {news_count} records, running backfill...")
+            try:
+                from worker.news_collector import backfill_news
+                backfill_news(pages=5)
+            except Exception as e:
+                logger.error(f"Bootstrap news backfill error: {e}")
+
         logger.info("Bootstrap: initial pipeline complete")
     except Exception as e:
         logger.error(f"Bootstrap error: {e}")

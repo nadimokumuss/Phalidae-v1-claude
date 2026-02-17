@@ -17,7 +17,7 @@ from db.models import (
     TrackedSymbol, CoinConfig, StrategyVariant, StrategyPerformance,
     Signal, PaperTrade, AgentJob,
 )
-from indicators import compute_all_indicators, score_selected_indicators
+from indicators import compute_all_indicators, score_all_indicators, score_selected_indicators
 from patterns import detect_all_patterns, score_patterns
 from levels import get_all_levels
 from worker.collector import get_ohlcv_df, _start_agent_job, _finish_agent_job
@@ -171,16 +171,86 @@ def _get_news_risk(symbol: str) -> float:
 
 
 def _analyze_single(config: CoinConfig, variant: StrategyVariant) -> bool:
-    """Analyze a single symbol with regime-aware strategy selection. Returns True if signal created."""
+    """Analyze a single symbol with multi-TF, all indicators, and full scoring. Returns True if signal created."""
     symbol = config.symbol
 
-    # Get data from DB (4h primary)
-    df = get_ohlcv_df(symbol, "4h", limit=300)
-    if df.empty or len(df) < 200:
+    # --- Multi-timeframe data loading ---
+    tf_weights = {"15m": 0.15, "1h": 0.25, "4h": 0.35, "1d": 0.20}
+    tf_results = {}
+
+    for tf, weight in tf_weights.items():
+        df = get_ohlcv_df(symbol, tf, limit=300)
+        if df.empty or len(df) < 50:
+            continue
+        df = compute_all_indicators(df)
+        all_scores = score_all_indicators(df)
+        patterns = detect_all_patterns(df)
+        pattern_score = score_patterns(patterns)
+        tf_results[tf] = {
+            "df": df,
+            "all_scores": all_scores,
+            "patterns": patterns,
+            "pattern_score": pattern_score,
+            "weight": weight,
+        }
+
+    if not tf_results:
         return False
 
-    # Compute indicators
-    df = compute_all_indicators(df)
+    # Must have at least 4h data
+    if "4h" not in tf_results:
+        return False
+
+    # --- Weighted multi-TF score ---
+    weighted_ind = 0
+    weighted_pat = 0
+    total_weight = 0
+    for tf, data in tf_results.items():
+        w = data["weight"]
+        weighted_ind += data["all_scores"]["total_normalized"] * w
+        weighted_pat += data["pattern_score"] * w
+        total_weight += w
+
+    final_ind_score = weighted_ind / total_weight
+    final_pat_score = weighted_pat / total_weight
+
+    # --- Chart pattern & trend line bonuses (from 4h) ---
+    primary = tf_results["4h"]
+    levels = get_all_levels(primary["df"])
+
+    chart_pattern_bonus = 0
+    for cp in levels.get("chart_patterns", []):
+        if cp["bias"] == "Bullish":
+            chart_pattern_bonus += cp["strength"] * 0.4
+        elif cp["bias"] == "Bearish":
+            chart_pattern_bonus -= cp["strength"] * 0.4
+    chart_pattern_bonus = max(-3, min(3, chart_pattern_bonus))
+
+    trend_line_bonus = 0
+    last_close = primary["df"]["close"].iloc[-1]
+    for tl in levels.get("trend_lines", []):
+        distance = abs(last_close - tl["current_value"]) / last_close
+        if distance < 0.01:
+            if tl["bias"] == "Bullish":
+                trend_line_bonus += tl["touches"] * 0.3
+            else:
+                trend_line_bonus -= tl["touches"] * 0.3
+    trend_line_bonus = max(-2, min(2, trend_line_bonus))
+
+    # --- Total score (4 components like manual scan) ---
+    total_score = round(final_ind_score + final_pat_score + chart_pattern_bonus + trend_line_bonus, 1)
+
+    # Bias from full score (lower threshold for more learning signals)
+    if total_score >= 2.0:
+        bias = "LONG"
+    elif total_score <= -2.0:
+        bias = "SHORT"
+    else:
+        return False
+
+    # Use 4h data for regime detection and downstream calculations
+    df = primary["df"]
+    patterns = primary["patterns"]
 
     # Detect current regime
     regime_details = get_regime_details(df)
@@ -199,29 +269,16 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant) -> bool:
     finally:
         session.close()
 
+    # Strategy-specific scores for optimizer learning (tracked separately)
     composition = best_variant.composition
     keys = []
     for cat in ["trend", "entry", "volume", "volatility"]:
         keys.extend(composition.get(cat, []))
 
-    if not keys:
-        return False
-
-    result = score_selected_indicators(df, keys)
-
-    # Patterns
-    patterns = detect_all_patterns(df)
-    pattern_score = score_patterns(patterns)
-
-    # Combined score
-    total_score = result["total_normalized"] + pattern_score
-    bias = result["bias"]
-
-    if bias == "NÖTR":
-        return False
+    # Get strategy-specific indicator scores for the optimizer
+    strategy_result = score_selected_indicators(df, keys) if keys else None
 
     # TP/SL from levels
-    levels = get_all_levels(df)
     atr = df["atr"].iloc[-1] if "atr" in df.columns and pd.notna(df["atr"].iloc[-1]) else 0
     if atr <= 0:
         return False
@@ -264,9 +321,12 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant) -> bool:
     finally:
         session.close()
 
-    # Volume confirmation check
+    # Use full all_scores from 4h for confidence calculation
+    all_indicator_scores = primary["all_scores"]["scores"]
+
+    # Volume confirmation check (strategy-specific)
     vol_keys = composition.get("volume", [])
-    vol_scores = [result["scores"].get(k, 0) for k in vol_keys]
+    vol_scores = [all_indicator_scores.get(k, 0) for k in vol_keys]
     vol_confirmed = (
         all(v > 0 for v in vol_scores) if bias == "LONG" and vol_scores
         else all(v < 0 for v in vol_scores) if bias == "SHORT" and vol_scores
@@ -274,7 +334,7 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant) -> bool:
     )
 
     conf_score, conf_breakdown = calculate_confidence_score(
-        indicator_scores=result["scores"],
+        indicator_scores=all_indicator_scores,
         pattern_count=len(patterns),
         regime=current_regime,
         rr_ratio=tp_sl["rr_ratio"],
@@ -320,10 +380,12 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant) -> bool:
             score=round(total_score, 1),
             strategy_variant_id=selected_variant_id,
             score_breakdown={
-                "indicators": result["total_normalized"],
-                "patterns": pattern_score,
+                "indicators": round(final_ind_score, 2),
+                "patterns": round(final_pat_score, 2),
+                "chart_patterns": round(chart_pattern_bonus, 2),
+                "trend_lines": round(trend_line_bonus, 2),
             },
-            indicator_scores=result["scores"],
+            indicator_scores=strategy_result["scores"] if strategy_result else all_indicator_scores,
             detected_patterns=[
                 {"pattern": p["pattern"], "bias": p["bias"], "strength": p["strength"]}
                 for p in patterns[:20]
@@ -339,7 +401,7 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant) -> bool:
             invalidation_note=invalidation,
             reasoning=_generate_decision_trace(
                 symbol, bias, conf_score, total_score, entry_price,
-                tp_sl, multi_tp, composition, result["scores"], patterns,
+                tp_sl, multi_tp, composition, all_indicator_scores, patterns,
                 current_regime, news_risk, eta_low, eta_high,
                 invalidation, alternative_signals, rejection_reasons,
                 config.leverage or 5.0,

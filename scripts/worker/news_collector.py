@@ -138,6 +138,126 @@ def collect_news():
         _finish_agent_job(job_id, "FAILED", collected, error=str(e))
 
 
+def backfill_news(pages: int = 5):
+    """Fetch multiple pages of historical news for cold-start using lTs pagination."""
+    job_id = _start_agent_job("news_backfill")
+    collected = 0
+    last_ts = None
+
+    try:
+        api_key = os.environ.get("CRYPTOCOMPARE_API_KEY", "")
+
+        for page in range(pages):
+            params = {
+                "lang": "EN",
+                "excludeCategories": "Sponsored",
+            }
+            if api_key:
+                params["api_key"] = api_key
+            if last_ts:
+                params["lTs"] = last_ts
+
+            try:
+                resp = requests.get(CRYPTOCOMPARE_URL, params=params, timeout=15)
+                resp.raise_for_status()
+                data = resp.json()
+            except Exception as e:
+                logger.error(f"News backfill page {page} request error: {e}")
+                break
+
+            if data.get("Type") != 100:
+                break
+
+            results = data.get("Data", [])
+            if not results:
+                break
+
+            # Track oldest timestamp for next page
+            oldest_ts = None
+            session = get_session()
+            try:
+                for item in results:
+                    ext_id = str(item.get("id", ""))
+                    if not ext_id:
+                        continue
+
+                    pub_ts = item.get("published_on", 0)
+                    if oldest_ts is None or pub_ts < oldest_ts:
+                        oldest_ts = pub_ts
+
+                    # Dedup check
+                    existing = session.query(NewsEvent).filter_by(
+                        source="cryptocompare", external_id=ext_id
+                    ).first()
+                    if existing:
+                        continue
+
+                    categories_str = item.get("categories", "")
+                    raw_cats = [c.strip() for c in categories_str.split("|") if c.strip()]
+                    symbols = [c for c in raw_cats if c in KNOWN_TICKERS]
+
+                    pos = int(item.get("upvotes", 0) or 0)
+                    neg = int(item.get("downvotes", 0) or 0)
+                    total_votes = pos + neg
+
+                    if total_votes > 0:
+                        if pos > neg * 2:
+                            sentiment = "bullish"
+                        elif neg > pos * 2:
+                            sentiment = "bearish"
+                        else:
+                            sentiment = "neutral"
+                        impact_score = round(neg / total_votes, 3)
+                    else:
+                        sentiment = "neutral"
+                        impact_score = 0.0
+
+                    try:
+                        published_at = datetime.utcfromtimestamp(int(pub_ts))
+                    except (ValueError, OSError):
+                        published_at = datetime.utcnow()
+
+                    major_coins = {"BTC", "ETH", "SOL", "XRP"}
+                    is_important = total_votes > 5 or bool(major_coins & set(symbols))
+
+                    session.add(NewsEvent(
+                        source="cryptocompare",
+                        external_id=ext_id,
+                        title=item.get("title", "")[:500],
+                        url=item.get("url", "")[:500],
+                        published_at=published_at,
+                        symbols=symbols if symbols else None,
+                        sentiment=sentiment,
+                        impact_score=impact_score,
+                        votes_positive=pos,
+                        votes_negative=neg,
+                        is_important=is_important,
+                        fetched_at=datetime.utcnow(),
+                    ))
+                    collected += 1
+
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(f"News backfill page {page} save error: {e}")
+            finally:
+                session.close()
+
+            # Set lTs for next page
+            if oldest_ts:
+                last_ts = oldest_ts
+            else:
+                break
+
+        if collected > 0:
+            logger.info(f"News backfill: collected {collected} articles over {pages} pages")
+        _finish_agent_job(job_id, "SUCCESS", collected)
+
+    except Exception as e:
+        logger.error(f"News backfill error: {e}")
+        _finish_agent_job(job_id, "FAILED", collected, error=str(e))
+
+
 def get_news_risk_score(symbol: str) -> float:
     """
     Calculate news risk score for a symbol (0.0 to 1.0).
