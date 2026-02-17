@@ -275,9 +275,19 @@ def start_scheduler():
         next_run_time=now + timedelta(minutes=1),
     )
 
+    # Run bootstrap as a one-time job (runs immediately in background thread)
+    _scheduler.add_job(
+        _bootstrap,
+        trigger=DateTrigger(run_date=now + timedelta(seconds=5)),
+        id="bootstrap",
+        name="Bootstrap Pipeline",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     _scheduler.start()
     _started = True
-    logger.info("Scheduler started with 10 jobs (all with immediate first-run)")
+    logger.info("Scheduler started with 11 jobs (bootstrap + 10 recurring)")
     return _scheduler
 
 
