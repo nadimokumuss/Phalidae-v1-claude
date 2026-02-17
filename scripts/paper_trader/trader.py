@@ -82,6 +82,13 @@ def _check_correlation(session, symbol: str) -> bool:
     return True
 
 
+def _to_float(val) -> float:
+    """Convert numpy/pandas numeric types to native Python float for PostgreSQL."""
+    if val is None:
+        return 0.0
+    return float(val)
+
+
 def open_paper_trade(
     signal_id: int | None,
     symbol: str,
@@ -100,6 +107,19 @@ def open_paper_trade(
     Open a new paper trade. Returns trade ID or None if rejected.
     Phase 2: Portfolio-aware position sizing + multi-TP.
     """
+    # Convert numpy types to native Python float for PostgreSQL compatibility
+    entry_price = _to_float(entry_price)
+    tp_price = _to_float(tp_price)
+    sl_price = _to_float(sl_price)
+    if leverage is not None:
+        leverage = float(leverage)
+    if position_size_usd is not None:
+        position_size_usd = float(position_size_usd)
+    if tp2_price is not None:
+        tp2_price = float(tp2_price)
+    if tp3_price is not None:
+        tp3_price = float(tp3_price)
+
     from worker.collector import _start_agent_job, _finish_agent_job
     job_id = _start_agent_job("open_trade")
 
