@@ -114,20 +114,20 @@ else:
 
 # ─── Page Router ───
 if page == "Dashboard":
-    from pages import page_dashboard
+    from views import page_dashboard
     page_dashboard.render()
 elif page == "Sinyaller":
-    from pages import page_signals
+    from views import page_signals
     page_signals.render()
 elif page == "Paper Trades":
-    from pages import page_paper_trades
+    from views import page_paper_trades
     page_paper_trades.render()
 elif page == "Strategy Lab":
-    from pages import page_strategy_lab
+    from views import page_strategy_lab
     page_strategy_lab.render()
 elif page == "Data Explorer":
-    from pages import page_data_explorer
+    from views import page_data_explorer
     page_data_explorer.render()
 elif page == "Analiz Kutuphanesi":
-    from pages import page_analysis_library
+    from views import page_analysis_library
     page_analysis_library.render()

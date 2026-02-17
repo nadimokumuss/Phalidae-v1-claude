@@ -115,40 +115,32 @@ def render():
 
         st.divider()
 
-        # --- Data Coverage ---
+        # --- Data Coverage (optimized: single query) ---
         st.subheader("Veri Kapsami")
-        symbols = (
-            session.query(TrackedSymbol)
-            .filter_by(is_active=True)
-            .order_by(TrackedSymbol.rank)
-            .limit(30)
+        coverage = (
+            session.query(
+                OHLCVData.symbol,
+                func.count(OHLCVData.id).label("cnt"),
+                func.min(OHLCVData.timestamp).label("earliest"),
+                func.max(OHLCVData.timestamp).label("latest"),
+            )
+            .group_by(OHLCVData.symbol)
             .all()
         )
 
-        if symbols:
+        if coverage:
             rows = []
-            for s in symbols:
-                candle_count = session.query(func.count(OHLCVData.id)).filter_by(
-                    symbol=s.symbol
-                ).scalar() or 0
-                earliest = session.query(func.min(OHLCVData.timestamp)).filter_by(
-                    symbol=s.symbol
-                ).scalar()
-                latest = session.query(func.max(OHLCVData.timestamp)).filter_by(
-                    symbol=s.symbol
-                ).scalar()
-
+            for c in coverage:
                 rows.append({
-                    "Coin": s.symbol.replace("/USDT:USDT", ""),
-                    "Rank": s.rank,
-                    "Mum Sayisi": candle_count,
-                    "Ilk Veri": earliest.strftime("%Y-%m-%d") if earliest else "-",
-                    "Son Veri": latest.strftime("%Y-%m-%d %H:%M") if latest else "-",
+                    "Coin": c.symbol.replace("/USDT:USDT", ""),
+                    "Mum Sayisi": c.cnt,
+                    "Ilk Veri": c.earliest.strftime("%Y-%m-%d") if c.earliest else "-",
+                    "Son Veri": c.latest.strftime("%Y-%m-%d %H:%M") if c.latest else "-",
                 })
-
+            rows.sort(key=lambda r: r["Mum Sayisi"], reverse=True)
             st.dataframe(pd.DataFrame(rows), width="stretch", height=400)
         else:
-            st.info("Henuz takip edilen coin yok. Collector ilk calistiginda otomatik eklenecek.")
+            st.info("Henuz veri yok. Collector ilk calistiginda otomatik eklenecek.")
 
         st.divider()
 

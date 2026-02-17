@@ -15,7 +15,7 @@ from worker.collector import _start_agent_job, _finish_agent_job
 
 logger = logging.getLogger("phalidae.news")
 
-CRYPTOPANIC_URL = "https://cryptopanic.com/api/v1/posts/"
+CRYPTOPANIC_URL = "https://cryptopanic.com/api/free/v1/posts/"
 
 # Map common crypto symbols to CryptoPanic currency codes
 SYMBOL_MAP = {
@@ -53,8 +53,23 @@ def collect_news():
             resp = requests.get(CRYPTOPANIC_URL, params=params, timeout=15)
             resp.raise_for_status()
             data = resp.json()
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"CryptoPanic HTTP {resp.status_code}: {resp.text[:200]}")
+            # Fallback: try pro endpoint if free fails
+            if "free" in CRYPTOPANIC_URL:
+                try:
+                    pro_url = CRYPTOPANIC_URL.replace("/free/", "/")
+                    resp = requests.get(pro_url, params=params, timeout=15)
+                    resp.raise_for_status()
+                    data = resp.json()
+                except Exception:
+                    _finish_agent_job(job_id, "FAILED", 0, error=f"Both endpoints failed: {e}")
+                    return
+            else:
+                _finish_agent_job(job_id, "FAILED", 0, error=str(e))
+                return
         except Exception as e:
-            logger.warning(f"CryptoPanic API error: {e}")
+            logger.error(f"CryptoPanic request error: {e}")
             _finish_agent_job(job_id, "FAILED", 0, error=str(e))
             return
 

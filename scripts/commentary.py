@@ -26,9 +26,10 @@ REGIME_LABELS = {
 }
 
 
+@st.cache_data(ttl=120, show_spinner=False)
 def generate_market_commentary(symbol: str = None) -> str:
     """
-    Generate market commentary.
+    Generate market commentary. Cached for 2 minutes.
     If symbol is None: general market overview.
     If symbol is provided: coin-specific commentary.
     """
