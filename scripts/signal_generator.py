@@ -175,7 +175,7 @@ def analyze_symbol(
     35 indikatör + 51 mum formasyonu + 12 S/R yöntemi + chart patterns
     """
     if timeframes is None:
-        timeframes = ["15m", "1h", "4h"]
+        timeframes = ["5m", "15m", "30m", "1h", "4h"]
 
     tf_results = {}
 
@@ -205,7 +205,7 @@ def analyze_symbol(
         return None
 
     # ── Çoklu TF skorlarını birleştir ──
-    weights = {"5m": 0.05, "15m": 0.15, "1h": 0.25, "4h": 0.35, "1d": 0.20}
+    weights = {"5m": 0.05, "15m": 0.10, "30m": 0.15, "1h": 0.25, "4h": 0.35}
     weighted_ind = 0
     weighted_pat = 0
     total_weight = 0

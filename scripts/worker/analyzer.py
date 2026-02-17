@@ -188,7 +188,7 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
     symbol = config.symbol
 
     # --- Multi-timeframe data loading ---
-    tf_weights = {"15m": 0.15, "1h": 0.25, "4h": 0.35, "1d": 0.20}
+    tf_weights = {"5m": 0.05, "15m": 0.10, "30m": 0.15, "1h": 0.25, "4h": 0.35}
     tf_results = {}
 
     for tf, weight in tf_weights.items():

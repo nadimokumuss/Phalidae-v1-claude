@@ -18,12 +18,13 @@ from db.models import OHLCVData, TrackedSymbol, FundingData, MarketRegimeRecord,
 
 logger = logging.getLogger("phalidae.collector")
 
-TIMEFRAMES = ["15m", "1h", "4h", "1d"]
+TIMEFRAMES = ["5m", "15m", "30m", "1h", "4h"]
 BACKFILL_LIMITS = {
+    "5m": 500,     # ~1.7 days
     "15m": 1000,   # ~10 days
+    "30m": 1000,   # ~20 days
     "1h": 1000,    # ~41 days
     "4h": 1000,    # ~166 days
-    "1d": 1000,    # ~2.7 years
 }
 
 _exchange = None
@@ -233,7 +234,7 @@ def collect_incremental():
     try:
         for sym in symbol_list:
             for tf in TIMEFRAMES:
-                new = _fetch_and_store(sym, tf, limit=50)
+                new = _fetch_and_store(sym, tf, limit=200)
                 total_new += new
             time.sleep(0.05)
 
