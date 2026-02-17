@@ -65,3 +65,41 @@ def get_session() -> Session:
 def create_all():
     from db.models import Base
     Base.metadata.create_all(get_engine())
+    _run_migrations()
+
+
+def _run_migrations():
+    """Add missing columns to existing tables. Safe to run multiple times."""
+    import logging
+    logger = logging.getLogger("phalidae.migrations")
+
+    migrations = [
+        # Phase 2: PaperTrade new columns
+        ("paper_trades", "partial_tp_taken", "BOOLEAN DEFAULT FALSE"),
+        ("paper_trades", "partial_tp_price", "FLOAT"),
+        ("paper_trades", "partial_tp_pnl", "FLOAT DEFAULT 0.0"),
+        ("paper_trades", "tp2_price", "FLOAT"),
+        ("paper_trades", "tp3_price", "FLOAT"),
+        ("paper_trades", "risk_pct", "FLOAT"),
+        # Phase 5: Signal new columns
+        ("signals", "confidence_score", "FLOAT"),
+        ("signals", "confidence_breakdown", "JSON"),
+        ("signals", "eta_hours_low", "FLOAT"),
+        ("signals", "eta_hours_high", "FLOAT"),
+        ("signals", "news_risk_score", "FLOAT"),
+        ("signals", "invalidation_note", "TEXT"),
+    ]
+
+    engine = get_engine()
+    with engine.connect() as conn:
+        for table, column, col_type in migrations:
+            try:
+                conn.execute(
+                    __import__("sqlalchemy").text(
+                        f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}"
+                    )
+                )
+            except Exception as e:
+                logger.warning(f"Migration skip {table}.{column}: {e}")
+        conn.commit()
+    logger.info(f"Migrations checked: {len(migrations)} columns")
