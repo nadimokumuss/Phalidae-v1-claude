@@ -27,6 +27,18 @@ from regime import classify_regime, get_regime_details, MarketRegime
 
 logger = logging.getLogger("phalidae.analyzer")
 
+
+def _to_float(val) -> float:
+    """Convert numpy/pandas numeric types to native Python float for PostgreSQL."""
+    if val is None:
+        return 0.0
+    return float(val)
+
+
+def _sanitize_scores(scores: dict) -> dict:
+    """Convert all values in a scores dict to native Python types."""
+    return {k: float(v) if v is not None else 0.0 for k, v in scores.items()}
+
 _exchange = None
 
 
@@ -368,38 +380,43 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
     from signal_generator import calculate_multi_tp
     multi_tp = calculate_multi_tp(entry_price, atr, bias)
 
-    # Save signal to DB
+    # Save signal to DB (convert all numpy types to native Python for PostgreSQL)
+    raw_scores = strategy_result["scores"] if strategy_result else all_indicator_scores
+    clean_scores = _sanitize_scores(raw_scores)
+    clean_breakdown = {
+        "indicators": round(float(final_ind_score), 2),
+        "patterns": round(float(final_pat_score), 2),
+        "chart_patterns": round(float(chart_pattern_bonus), 2),
+        "trend_lines": round(float(trend_line_bonus), 2),
+    }
+    clean_conf_breakdown = {k: float(v) for k, v in conf_breakdown.items()} if conf_breakdown else {}
+
     session = get_session()
     try:
         signal = Signal(
             symbol=symbol,
             bias=bias,
-            entry_price=entry_price,
-            tp_price=tp_sl["tp"],
-            sl_price=tp_sl["sl"],
-            rr_ratio=tp_sl["rr_ratio"],
+            entry_price=_to_float(entry_price),
+            tp_price=_to_float(tp_sl["tp"]),
+            sl_price=_to_float(tp_sl["sl"]),
+            rr_ratio=_to_float(tp_sl["rr_ratio"]),
             confidence=confidence,
-            score=round(total_score, 1),
+            score=round(float(total_score), 1),
             strategy_variant_id=selected_variant_id,
-            score_breakdown={
-                "indicators": round(final_ind_score, 2),
-                "patterns": round(final_pat_score, 2),
-                "chart_patterns": round(chart_pattern_bonus, 2),
-                "trend_lines": round(trend_line_bonus, 2),
-            },
-            indicator_scores=strategy_result["scores"] if strategy_result else all_indicator_scores,
+            score_breakdown=clean_breakdown,
+            indicator_scores=clean_scores,
             detected_patterns=[
-                {"pattern": p["pattern"], "bias": p["bias"], "strength": p["strength"]}
+                {"pattern": p["pattern"], "bias": p["bias"], "strength": int(p["strength"])}
                 for p in patterns[:20]
             ],
             regime=current_regime,
             alternative_signals=alternative_signals or None,
             rejection_reasons=rejection_reasons or None,
-            confidence_score=conf_score,
-            confidence_breakdown=conf_breakdown,
-            eta_hours_low=eta_low,
-            eta_hours_high=eta_high,
-            news_risk_score=news_risk,
+            confidence_score=_to_float(conf_score),
+            confidence_breakdown=clean_conf_breakdown,
+            eta_hours_low=_to_float(eta_low),
+            eta_hours_high=_to_float(eta_high),
+            news_risk_score=_to_float(news_risk),
             invalidation_note=invalidation,
             reasoning=_generate_decision_trace(
                 symbol, bias, conf_score, total_score, entry_price,
