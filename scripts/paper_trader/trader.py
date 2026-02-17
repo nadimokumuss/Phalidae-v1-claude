@@ -20,7 +20,7 @@ DEFAULT_LEVERAGE = 5.0
 DEFAULT_POSITION_SIZE = 1000.0
 MAX_OPEN_TRADES_PER_SYMBOL = 1
 MAX_TOTAL_OPEN_TRADES = 20
-MAX_CORRELATION = 0.85  # Max allowed correlation with existing open trades
+MAX_CORRELATION = 0.95  # Max allowed correlation with existing open trades
 
 
 def _check_daily_drawdown(session, symbol: str) -> bool:
