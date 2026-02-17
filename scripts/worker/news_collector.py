@@ -1,6 +1,6 @@
 """
 Phalidae v2 - News Collector (Phase 4)
-Fetches crypto news from CryptoPanic API.
+Fetches crypto news from CryptoCompare API (primary) with CryptoPanic fallback.
 """
 
 import os
@@ -15,74 +15,49 @@ from worker.collector import _start_agent_job, _finish_agent_job
 
 logger = logging.getLogger("phalidae.news")
 
-CRYPTOPANIC_URL = "https://cryptopanic.com/api/free/v1/posts/"
+CRYPTOCOMPARE_URL = "https://min-api.cryptocompare.com/data/v2/news/"
 
-# Map common crypto symbols to CryptoPanic currency codes
-SYMBOL_MAP = {
-    "BTC/USDT:USDT": "BTC",
-    "ETH/USDT:USDT": "ETH",
-    "SOL/USDT:USDT": "SOL",
-    "XRP/USDT:USDT": "XRP",
-    "DOGE/USDT:USDT": "DOGE",
-    "ADA/USDT:USDT": "ADA",
-    "AVAX/USDT:USDT": "AVAX",
-    "DOT/USDT:USDT": "DOT",
-    "LINK/USDT:USDT": "LINK",
-    "MATIC/USDT:USDT": "MATIC",
+# Known crypto ticker symbols for filtering categories
+KNOWN_TICKERS = {
+    "BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "AVAX", "DOT", "LINK",
+    "MATIC", "ATOM", "UNI", "AAVE", "LTC", "BCH", "FIL", "NEAR", "APT",
+    "ARB", "OP", "INJ", "SEI", "SUI", "TIA", "PEPE", "WIF", "BONK",
+    "SHIB", "BNB", "TRX", "TON", "FTM", "ALGO", "HBAR", "VET", "SAND",
+    "MANA", "AXS", "CRV", "MKR", "COMP", "SNX", "RUNE", "TAO",
 }
 
 
 def collect_news():
-    """Fetch latest news from CryptoPanic. Called every 15 minutes."""
-    api_key = os.environ.get("CRYPTOPANIC_API_KEY", "")
-    if not api_key:
-        logger.info("CRYPTOPANIC_API_KEY not set, skipping news collection")
-        return
-
-    # Quick availability check before starting agent job
-    try:
-        probe = requests.head(CRYPTOPANIC_URL, timeout=5)
-        if probe.status_code == 404:
-            logger.info("CryptoPanic API unavailable (404), skipping")
-            return
-    except requests.RequestException:
-        pass  # Network error, try full request anyway
-
+    """Fetch latest news from CryptoCompare. Called every 15 minutes."""
     job_id = _start_agent_job("news_collector")
     collected = 0
 
     try:
         params = {
-            "auth_token": api_key,
-            "public": "true",
-            "kind": "news",
+            "lang": "EN",
+            "excludeCategories": "Sponsored",
         }
 
+        # Optional: add API key for higher rate limits
+        api_key = os.environ.get("CRYPTOCOMPARE_API_KEY", "")
+        if api_key:
+            params["api_key"] = api_key
+
         try:
-            resp = requests.get(CRYPTOPANIC_URL, params=params, timeout=15)
+            resp = requests.get(CRYPTOCOMPARE_URL, params=params, timeout=15)
             resp.raise_for_status()
             data = resp.json()
-        except requests.exceptions.HTTPError as e:
-            logger.error(f"CryptoPanic HTTP {resp.status_code}: {resp.text[:200]}")
-            # Fallback: try pro endpoint if free fails
-            if "free" in CRYPTOPANIC_URL:
-                try:
-                    pro_url = CRYPTOPANIC_URL.replace("/free/", "/")
-                    resp = requests.get(pro_url, params=params, timeout=15)
-                    resp.raise_for_status()
-                    data = resp.json()
-                except Exception:
-                    _finish_agent_job(job_id, "FAILED", 0, error=f"Both endpoints failed: {e}")
-                    return
-            else:
-                _finish_agent_job(job_id, "FAILED", 0, error=str(e))
-                return
         except Exception as e:
-            logger.error(f"CryptoPanic request error: {e}")
+            logger.error(f"CryptoCompare request error: {e}")
             _finish_agent_job(job_id, "FAILED", 0, error=str(e))
             return
 
-        results = data.get("results", [])
+        if data.get("Type") != 100:
+            msg = data.get("Message", "Unknown error")
+            _finish_agent_job(job_id, "FAILED", 0, error=f"API error: {msg}")
+            return
+
+        results = data.get("Data", [])
 
         session = get_session()
         try:
@@ -91,21 +66,21 @@ def collect_news():
                 if not ext_id:
                     continue
 
-                # Check dedup
+                # Dedup check
                 existing = session.query(NewsEvent).filter_by(
-                    source="cryptopanic", external_id=ext_id
+                    source="cryptocompare", external_id=ext_id
                 ).first()
                 if existing:
                     continue
 
-                # Extract symbols
-                currencies = item.get("currencies", []) or []
-                symbols = [c.get("code", "") for c in currencies if c.get("code")]
+                # Extract symbols from pipe-delimited categories
+                categories_str = item.get("categories", "")
+                raw_cats = [c.strip() for c in categories_str.split("|") if c.strip()]
+                symbols = [c for c in raw_cats if c in KNOWN_TICKERS]
 
                 # Sentiment from votes
-                votes = item.get("votes", {}) or {}
-                pos = votes.get("positive", 0) or 0
-                neg = votes.get("negative", 0) or 0
+                pos = int(item.get("upvotes", 0) or 0)
+                neg = int(item.get("downvotes", 0) or 0)
                 total_votes = pos + neg
 
                 if total_votes > 0:
@@ -115,20 +90,24 @@ def collect_news():
                         sentiment = "bearish"
                     else:
                         sentiment = "neutral"
-                    impact_score = round(neg / total_votes, 3) if total_votes > 0 else 0.0
+                    impact_score = round(neg / total_votes, 3)
                 else:
                     sentiment = "neutral"
                     impact_score = 0.0
 
-                # Parse published date
-                pub_str = item.get("published_at", "")
+                # Parse published date (unix timestamp)
+                pub_ts = item.get("published_on", 0)
                 try:
-                    published_at = datetime.fromisoformat(pub_str.replace("Z", "+00:00")).replace(tzinfo=None)
-                except (ValueError, AttributeError):
+                    published_at = datetime.utcfromtimestamp(int(pub_ts))
+                except (ValueError, OSError):
                     published_at = datetime.utcnow()
 
+                # Importance: has many votes or mentions major coins
+                major_coins = {"BTC", "ETH", "SOL", "XRP"}
+                is_important = total_votes > 5 or bool(major_coins & set(symbols))
+
                 session.add(NewsEvent(
-                    source="cryptopanic",
+                    source="cryptocompare",
                     external_id=ext_id,
                     title=item.get("title", "")[:500],
                     url=item.get("url", "")[:500],
@@ -138,7 +117,7 @@ def collect_news():
                     impact_score=impact_score,
                     votes_positive=pos,
                     votes_negative=neg,
-                    is_important=item.get("important", False),
+                    is_important=is_important,
                     fetched_at=datetime.utcnow(),
                 ))
                 collected += 1
@@ -151,7 +130,7 @@ def collect_news():
             session.close()
 
         if collected > 0:
-            logger.info(f"Collected {collected} news items")
+            logger.info(f"Collected {collected} news items from CryptoCompare")
         _finish_agent_job(job_id, "SUCCESS", collected)
 
     except Exception as e:
@@ -165,19 +144,15 @@ def get_news_risk_score(symbol: str) -> float:
     Based on last 24h of news sentiment.
     0.0 = no risk, 1.0 = high risk (many bearish news)
     """
-    # Extract currency code
     clean = symbol.replace("/USDT:USDT", "")
 
     session = get_session()
     try:
         since = datetime.utcnow() - timedelta(hours=24)
 
-        # Get news mentioning this symbol
         news = (
             session.query(NewsEvent)
-            .filter(
-                NewsEvent.published_at >= since,
-            )
+            .filter(NewsEvent.published_at >= since)
             .all()
         )
 
