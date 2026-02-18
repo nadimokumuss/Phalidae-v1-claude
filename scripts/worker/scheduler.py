@@ -103,6 +103,47 @@ def _job_portfolio_snapshot():
         logger.error(f"Portfolio snapshot job error: {e}")
 
 
+def _job_backfill_underfilled():
+    """Backfill symbols with insufficient data. Runs as separate job to not block bootstrap."""
+    from worker.collector import _start_agent_job, _finish_agent_job, backfill_symbol
+    job_id = _start_agent_job("backfill_underfilled")
+    filled = 0
+    try:
+        from db.engine import get_session
+        from db.models import TrackedSymbol, OHLCVData
+        from sqlalchemy import func
+        s = get_session()
+        try:
+            bar_counts = (
+                s.query(TrackedSymbol.symbol, func.count(OHLCVData.id))
+                .outerjoin(OHLCVData, (TrackedSymbol.symbol == OHLCVData.symbol) & (OHLCVData.timeframe == '4h'))
+                .filter(TrackedSymbol.is_active.is_(True))
+                .group_by(TrackedSymbol.symbol)
+                .all()
+            )
+        finally:
+            s.close()
+        underfilled = [sym for sym, cnt in bar_counts if cnt < 200]
+        if not underfilled:
+            logger.info("Backfill: all symbols have sufficient data")
+            _finish_agent_job(job_id, "SUCCESS", 0, context={"message": "all_filled"})
+            return
+
+        logger.info(f"Backfill: {len(underfilled)} symbols need data...")
+        for sym in underfilled:
+            try:
+                backfill_symbol(sym)
+                filled += 1
+                logger.info(f"Backfill: {filled}/{len(underfilled)} done ({sym})")
+            except Exception as e:
+                logger.error(f"Backfill error for {sym}: {e}")
+
+        _finish_agent_job(job_id, "SUCCESS", filled, context={"total": len(underfilled)})
+    except Exception as e:
+        logger.error(f"Backfill job error: {e}")
+        _finish_agent_job(job_id, "FAILED", filled, error=str(e))
+
+
 def _bootstrap():
     """Run once at startup: ensure symbols exist, then trigger first collection."""
     logger.info("Bootstrap: starting initial data pipeline...")
@@ -120,48 +161,19 @@ def _bootstrap():
             logger.info("Bootstrap: no symbols found, running refresh_tracked_symbols...")
             _job_refresh_symbols()
 
-        # Step 2: Backfill any symbols with insufficient data (<200 bars on 4h)
-        logger.info("Bootstrap: checking for under-filled symbols...")
-        try:
-            from db.models import OHLCVData
-            from sqlalchemy import func
-            from worker.collector import backfill_symbol
-            s = get_session()
-            try:
-                bar_counts = (
-                    s.query(TrackedSymbol.symbol, func.count(OHLCVData.id))
-                    .outerjoin(OHLCVData, (TrackedSymbol.symbol == OHLCVData.symbol) & (OHLCVData.timeframe == '4h'))
-                    .filter(TrackedSymbol.is_active.is_(True))
-                    .group_by(TrackedSymbol.symbol)
-                    .all()
-                )
-            finally:
-                s.close()
-            underfilled = [sym for sym, cnt in bar_counts if cnt < 200]
-            if underfilled:
-                logger.info(f"Bootstrap: backfilling {len(underfilled)} under-filled symbols...")
-                for sym in underfilled:
-                    try:
-                        backfill_symbol(sym)
-                    except Exception as e:
-                        logger.error(f"Bootstrap backfill error for {sym}: {e}")
-                logger.info(f"Bootstrap: backfill complete for {len(underfilled)} symbols")
-        except Exception as e:
-            logger.error(f"Bootstrap backfill check error: {e}")
-
-        # Step 3: Run first collection immediately
+        # Step 2: Run first collection immediately
         logger.info("Bootstrap: running initial collector...")
         _job_collect()
 
-        # Step 4: Run market data + regime
+        # Step 3: Run market data + regime
         logger.info("Bootstrap: running initial market data...")
         _job_market_data()
 
-        # Step 5: Run news collector
+        # Step 4: Run news collector
         logger.info("Bootstrap: running initial news collection...")
         _job_collect_news()
 
-        # Step 6: News backfill if table is nearly empty
+        # Step 5: News backfill if table is nearly empty
         try:
             from db.models import NewsEvent
             s = get_session()
@@ -314,9 +326,20 @@ def start_scheduler():
         max_instances=1,
     )
 
+    # Backfill under-filled symbols - runs once, 1 minute after startup
+    # Separate from bootstrap so it doesn't block the initial pipeline
+    _scheduler.add_job(
+        _job_backfill_underfilled,
+        trigger=DateTrigger(run_date=now + timedelta(minutes=1)),
+        id="backfill_underfilled",
+        name="Backfill Under-filled Symbols",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     _scheduler.start()
     _started = True
-    logger.info("Scheduler started with 11 jobs (bootstrap + 10 recurring)")
+    logger.info("Scheduler started with 12 jobs (bootstrap + backfill + 10 recurring)")
     return _scheduler
 
 
