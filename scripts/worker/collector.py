@@ -160,14 +160,22 @@ def _fetch_and_store(symbol: str, timeframe: str, limit: int = 200, since_ms: in
     session = get_session()
     new_count = 0
     try:
-        for bar in bars:
-            ts = datetime.utcfromtimestamp(bar[0] / 1000)
-            exists = session.query(OHLCVData.id).filter_by(
-                symbol=symbol, timeframe=timeframe, timestamp=ts
-            ).first()
-            if exists:
-                continue
+        # Bulk check: get all existing timestamps in one query
+        all_ts = [datetime.utcfromtimestamp(bar[0] / 1000) for bar in bars]
+        existing = set(
+            row[0] for row in
+            session.query(OHLCVData.timestamp)
+            .filter(
+                OHLCVData.symbol == symbol,
+                OHLCVData.timeframe == timeframe,
+                OHLCVData.timestamp.in_(all_ts),
+            )
+            .all()
+        )
 
+        for bar, ts in zip(bars, all_ts):
+            if ts in existing:
+                continue
             session.add(OHLCVData(
                 symbol=symbol,
                 timeframe=timeframe,
