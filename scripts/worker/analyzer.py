@@ -338,14 +338,18 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
     # Use full all_scores from 4h for confidence calculation
     all_indicator_scores = primary["all_scores"]["scores"]
 
-    # Volume confirmation check (strategy-specific)
-    vol_keys = composition.get("volume", [])
-    vol_scores = [all_indicator_scores.get(k, 0) for k in vol_keys]
-    vol_confirmed = (
-        all(v > 0 for v in vol_scores) if bias == "LONG" and vol_scores
-        else all(v < 0 for v in vol_scores) if bias == "SHORT" and vol_scores
-        else False
-    )
+    # Volume confirmation: check all volume-related indicators directly
+    vol_indicators = ["obv_trend", "vwap_position", "mfi_signal", "volume_sma_ratio",
+                      "cmf_signal", "adl_trend", "volume_momentum"]
+    vol_scores_direct = [all_indicator_scores.get(k, 0) for k in vol_indicators
+                         if all_indicator_scores.get(k, 0) != 0]
+    if vol_scores_direct:
+        if bias == "LONG":
+            vol_confirmed = sum(1 for v in vol_scores_direct if v > 0) / len(vol_scores_direct)
+        else:
+            vol_confirmed = sum(1 for v in vol_scores_direct if v < 0) / len(vol_scores_direct)
+    else:
+        vol_confirmed = 0.5  # Neutral if no volume data
 
     conf_score, conf_breakdown = calculate_confidence_score(
         indicator_scores=all_indicator_scores,
@@ -354,8 +358,17 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
         rr_ratio=tp_sl["rr_ratio"],
         news_risk=news_risk,
         backtest_win_rate=backtest_wr,
-        volume_confirmation=1.0 if vol_confirmed else 0.0,
+        volume_confirmation=vol_confirmed,
     )
+
+    # If backtest data is missing, redistribute those points proportionally
+    # Without backtest: regime_fit(20) + backtest_history(10) = 30 points unavailable
+    # Scale the available 70 points to 100
+    if backtest_wr == 0:
+        available_max = 25 + 15 + 10 + 10 + 10  # confluence + rr + patterns + volume + news = 70
+        if available_max > 0:
+            conf_score = round(conf_score / available_max * 100, 1)
+            conf_score = min(conf_score, 100)
 
     # ETA estimation
     eta_low, eta_high = estimate_time_to_target(symbol, bias, entry_price, tp_sl["tp"])
