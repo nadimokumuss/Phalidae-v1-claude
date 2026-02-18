@@ -45,7 +45,7 @@ _exchange = None
 def _get_exchange() -> ccxt.binanceusdm:
     global _exchange
     if _exchange is None:
-        _exchange = ccxt.binanceusdm({"enableRateLimit": True})
+        _exchange = ccxt.binanceusdm({"enableRateLimit": True, "timeout": 15000})
     return _exchange
 
 
