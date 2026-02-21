@@ -95,7 +95,7 @@ st.sidebar.divider()
 
 page = st.sidebar.radio(
     "Sayfa",
-    ["Dashboard", "Sinyaller", "Paper Trades", "Strategy Lab", "Data Explorer", "Analiz Kutuphanesi"],
+    ["Dashboard", "Sinyaller", "Paper Trades", "Strategy Lab", "Data Explorer", "Analiz Kutuphanesi", "TradingView"],
     index=0,
 )
 
@@ -136,3 +136,6 @@ elif page == "Data Explorer":
 elif page == "Analiz Kutuphanesi":
     from views import page_analysis_library
     page_analysis_library.render()
+elif page == "TradingView":
+    from views import page_tradingview
+    page_tradingview.render()
