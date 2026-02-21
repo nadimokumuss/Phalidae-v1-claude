@@ -23,23 +23,40 @@ def render():
 
     # --- Kontroller ---
     open_trades = get_open_trades_cached()
-    open_symbols = sorted(set(t["symbol"] for t in open_trades))
 
-    if not open_symbols:
+    if not open_trades:
         st.warning("Acik islem bulunamadi. Bot islem actiktan sonra burada gorunecek.")
         return
 
-    display_names = [s.replace("/USDT:USDT", "") for s in open_symbols]
+    # Her coin icin en iyi P&L% hesapla (kardan zarara siralama)
+    symbol_pnl: dict[str, float] = {}
+    for t in open_trades:
+        sym = t["symbol"]
+        entry = t["entry_price"]
+        leverage = t.get("leverage", 5.0)
+        # MFE/MAE bazli tahmini P&L (anlik fiyat fragment icinde hesaplanir)
+        # Burada basit entry-bazli skor: mfe yuksek = iyi
+        pnl_score = t.get("mfe_pct", 0) - t.get("mae_pct", 0)
+        if sym not in symbol_pnl:
+            symbol_pnl[sym] = pnl_score
+        else:
+            symbol_pnl[sym] = max(symbol_pnl[sym], pnl_score)
+
+    sorted_symbols = sorted(symbol_pnl.keys(), key=lambda s: symbol_pnl[s], reverse=True)
+    display_names = [
+        f"{s.replace('/USDT:USDT', '')} ({symbol_pnl[s]:+.1f})"
+        for s in sorted_symbols
+    ]
 
     col1, col2, col3 = st.columns([2, 1, 2])
     with col1:
         sel_idx = st.selectbox(
             "Coin",
-            range(len(open_symbols)),
+            range(len(sorted_symbols)),
             format_func=lambda i: display_names[i],
         )
-        selected_symbol = open_symbols[sel_idx]
-        coin_name = display_names[sel_idx]
+        selected_symbol = sorted_symbols[sel_idx]
+        coin_name = selected_symbol.replace("/USDT:USDT", "")
     with col2:
         tf_options = ["5m", "15m", "30m", "1h", "4h"]
         selected_tf = st.selectbox("Timeframe", tf_options, index=3)
