@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 
 from commentary import generate_page_header
 from views.cache import (
-    get_active_symbols_cached,
     get_ohlcv_cached,
     get_open_trades_cached,
     get_closed_trades_cached,
@@ -23,22 +22,23 @@ def render():
     st.caption("Bot islemlerini canli grafik uzerinde takip edin.")
 
     # --- Kontroller ---
-    symbols = get_active_symbols_cached()
-    symbol_list = [s["symbol"] for s in symbols]
-    display_names = [s["symbol"].replace("/USDT:USDT", "") for s in symbols]
+    open_trades = get_open_trades_cached()
+    open_symbols = sorted(set(t["symbol"] for t in open_trades))
 
-    if not symbol_list:
-        st.warning("Aktif coin bulunamadi. Collector'un calismasi bekleniyor.")
+    if not open_symbols:
+        st.warning("Acik islem bulunamadi. Bot islem actiktan sonra burada gorunecek.")
         return
+
+    display_names = [s.replace("/USDT:USDT", "") for s in open_symbols]
 
     col1, col2, col3 = st.columns([2, 1, 2])
     with col1:
         sel_idx = st.selectbox(
             "Coin",
-            range(len(symbol_list)),
+            range(len(open_symbols)),
             format_func=lambda i: display_names[i],
         )
-        selected_symbol = symbol_list[sel_idx]
+        selected_symbol = open_symbols[sel_idx]
         coin_name = display_names[sel_idx]
     with col2:
         tf_options = ["5m", "15m", "30m", "1h", "4h"]
