@@ -28,23 +28,33 @@ def render():
         st.warning("Acik islem bulunamadi. Bot islem actiktan sonra burada gorunecek.")
         return
 
-    # Her coin icin en iyi P&L% hesapla (kardan zarara siralama)
+    # Her coin icin gercek unrealized P&L% hesapla (son 1h mum close fiyati)
+    unique_symbols = sorted(set(t["symbol"] for t in open_trades))
+    latest_prices: dict[str, float] = {}
+    for sym in unique_symbols:
+        candles = get_ohlcv_cached(sym, "1h", 1)
+        if candles:
+            latest_prices[sym] = candles[-1]["close"]
+
     symbol_pnl: dict[str, float] = {}
     for t in open_trades:
         sym = t["symbol"]
         entry = t["entry_price"]
         leverage = t.get("leverage", 5.0)
-        # MFE/MAE bazli tahmini P&L (anlik fiyat fragment icinde hesaplanir)
-        # Burada basit entry-bazli skor: mfe yuksek = iyi
-        pnl_score = t.get("mfe_pct", 0) - t.get("mae_pct", 0)
-        if sym not in symbol_pnl:
-            symbol_pnl[sym] = pnl_score
+        price = latest_prices.get(sym, 0)
+        if price and entry:
+            if t["bias"] == "LONG":
+                pnl = ((price - entry) / entry) * 100 * leverage
+            else:
+                pnl = ((entry - price) / entry) * 100 * leverage
         else:
-            symbol_pnl[sym] = max(symbol_pnl[sym], pnl_score)
+            pnl = 0.0
+        # Coin basina toplam P&L (birden fazla pozisyon varsa toplam)
+        symbol_pnl[sym] = symbol_pnl.get(sym, 0) + pnl
 
     sorted_symbols = sorted(symbol_pnl.keys(), key=lambda s: symbol_pnl[s], reverse=True)
     display_names = [
-        f"{s.replace('/USDT:USDT', '')} ({symbol_pnl[s]:+.1f})"
+        f"{s.replace('/USDT:USDT', '')} ({symbol_pnl[s]:+.1f}%)"
         for s in sorted_symbols
     ]
 
