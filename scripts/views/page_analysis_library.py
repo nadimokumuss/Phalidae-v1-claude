@@ -10,6 +10,7 @@ from datetime import datetime
 from db.engine import get_session
 from db.models import ExternalAnalysis, TrackedSymbol
 from commentary import generate_page_header
+from views.cache import get_active_symbols_cached, get_analyses_cached
 
 
 def render():
@@ -31,13 +32,9 @@ def render():
 
 def _render_add_analysis():
     """Form to add a new external analysis."""
-    session = get_session()
-    try:
-        symbols = session.query(TrackedSymbol).filter_by(is_active=True).order_by(TrackedSymbol.rank).all()
-        sym_list = [s.symbol for s in symbols]
-        sym_labels = [s.symbol.replace("/USDT:USDT", "") for s in symbols]
-    finally:
-        session.close()
+    symbols = get_active_symbols_cached()
+    sym_list = [s["symbol"] for s in symbols]
+    sym_labels = [s["symbol"].replace("/USDT:USDT", "") for s in symbols]
 
     with st.form("add_analysis"):
         c1, c2 = st.columns(2)
@@ -85,6 +82,7 @@ def _render_add_analysis():
                 added_at=datetime.utcnow(),
             ))
             session.commit()
+            get_analyses_cached.clear()
             st.success("Analiz kaydedildi!")
         except Exception as e:
             session.rollback()
@@ -94,17 +92,8 @@ def _render_add_analysis():
 
 
 def _render_library():
-    """Show all analyses with filters."""
-    session = get_session()
-    try:
-        analyses = (
-            session.query(ExternalAnalysis)
-            .order_by(ExternalAnalysis.added_at.desc())
-            .limit(200)
-            .all()
-        )
-    finally:
-        session.close()
+    """Show all analyses with filters — cached (TTL=60s)."""
+    analyses = get_analyses_cached()
 
     if not analyses:
         st.info("Henuz analiz eklenmedi.")
@@ -115,7 +104,7 @@ def _render_library():
     with c1:
         bias_f = st.multiselect("Bias", ["LONG", "SHORT"], default=["LONG", "SHORT"], key="lib_bias")
     with c2:
-        source_types = list(set(a.source_type for a in analyses))
+        source_types = list(set(a["source_type"] for a in analyses))
         source_f = st.multiselect("Kaynak", source_types, default=source_types, key="lib_source")
     with c3:
         outcome_f = st.multiselect("Sonuc", ["PENDING", "CORRECT", "WRONG", "PARTIAL"],
@@ -123,25 +112,25 @@ def _render_library():
 
     filtered = [
         a for a in analyses
-        if a.bias_claimed in bias_f
-        and a.source_type in source_f
-        and (a.outcome or "PENDING") in outcome_f
+        if a["bias_claimed"] in bias_f
+        and a["source_type"] in source_f
+        and a["outcome"] in outcome_f
     ]
 
     rows = []
     for a in filtered:
-        coin = (a.symbol or "").replace("/USDT:USDT", "")
+        coin = (a["symbol"] or "").replace("/USDT:USDT", "")
         rows.append({
-            "ID": a.id,
+            "ID": a["id"],
             "Coin": coin,
-            "Yazar": a.author or "-",
-            "Bias": a.bias_claimed or "-",
-            "Hedef": f"${a.target_price:,.2f}" if a.target_price else "-",
-            "Stop": f"${a.stop_price:,.2f}" if a.stop_price else "-",
-            "Kaynak": a.source_type,
-            "Sonuc": a.outcome or "PENDING",
-            "Ders": (a.lesson_learned or "")[:50],
-            "Tarih": a.added_at.strftime("%m-%d %H:%M") if a.added_at else "-",
+            "Yazar": a["author"] or "-",
+            "Bias": a["bias_claimed"] or "-",
+            "Hedef": f"${a['target_price']:,.2f}" if a["target_price"] else "-",
+            "Stop": f"${a['stop_price']:,.2f}" if a["stop_price"] else "-",
+            "Kaynak": a["source_type"],
+            "Sonuc": a["outcome"],
+            "Ders": (a["lesson_learned"] or "")[:50],
+            "Tarih": a["added_at"],
         })
 
     if rows:
@@ -151,18 +140,18 @@ def _render_library():
         sel = st.selectbox(
             "Detay:",
             range(len(filtered)),
-            format_func=lambda i: f"#{filtered[i].id} {(filtered[i].symbol or '').replace('/USDT:USDT', '')} {filtered[i].bias_claimed}",
+            format_func=lambda i: f"#{filtered[i]['id']} {(filtered[i]['symbol'] or '').replace('/USDT:USDT', '')} {filtered[i]['bias_claimed']}",
             key="lib_detail",
         )
         a = filtered[sel]
         with st.expander("Analiz Detayi", expanded=True):
-            st.markdown(f"**Ozet:** {a.summary}")
-            if a.tools_used:
-                st.markdown(f"**Araclar:** {', '.join(a.tools_used)}")
-            if a.outcome_notes:
-                st.markdown(f"**Notlar:** {a.outcome_notes}")
-            if a.lesson_learned:
-                st.success(f"**Ders:** {a.lesson_learned}")
+            st.markdown(f"**Ozet:** {a['summary']}")
+            if a["tools_used"]:
+                st.markdown(f"**Araclar:** {', '.join(a['tools_used'])}")
+            if a["outcome_notes"]:
+                st.markdown(f"**Notlar:** {a['outcome_notes']}")
+            if a["lesson_learned"]:
+                st.success(f"**Ders:** {a['lesson_learned']}")
     else:
         st.info("Filtrelere uygun analiz bulunamadi.")
 
@@ -227,6 +216,7 @@ def _render_pending_validation():
                         a.lesson_learned = lesson if lesson else None
                         a.verified_at = datetime.utcnow()
                         session.commit()
+                        get_analyses_cached.clear()
                         st.success("Guncellendi!")
                         st.rerun()
                 except Exception as e:

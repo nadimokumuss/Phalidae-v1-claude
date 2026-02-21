@@ -2,8 +2,7 @@
 Phalidae v2 - Strategy Lab Page (Phase 3 + 5)
 Per-coin strategy rankings, variant details, comparison, global leaderboard.
 Includes: regime-based performance breakdown, correlation matrix, regime filters.
-Phase 3: Periodic analysis tab.
-Phase 5: Commentary header.
+Optimized: cache + N+1 fix.
 """
 
 import streamlit as st
@@ -12,12 +11,16 @@ import numpy as np
 
 from db.engine import get_session
 from db.models import (
-    TrackedSymbol, StrategyVariant, StrategyPerformance, CoinConfig,
-    CorrelationCache, OHLCVData,
+    StrategyVariant, StrategyPerformance, OHLCVData,
 )
 from strategy.optimizer import get_top_strategies
 from sqlalchemy import func
 from commentary import generate_page_header
+from views.cache import (
+    get_active_symbols_cached,
+    get_global_leaderboard_cached,
+    get_correlation_data_cached,
+)
 
 
 def render():
@@ -43,23 +46,14 @@ def render():
 
 def _render_coin_strategies():
     """Show strategy rankings for a selected coin with regime breakdown."""
-    session = get_session()
-    try:
-        symbols = (
-            session.query(TrackedSymbol)
-            .filter_by(is_active=True)
-            .order_by(TrackedSymbol.rank)
-            .all()
-        )
-    finally:
-        session.close()
+    symbols = get_active_symbols_cached()
 
     if not symbols:
         st.info("Henuz takip edilen coin yok.")
         return
 
-    sym_list = [s.symbol for s in symbols]
-    sym_labels = [s.symbol.replace("/USDT:USDT", "") for s in symbols]
+    sym_list = [s["symbol"] for s in symbols]
+    sym_labels = [s["symbol"].replace("/USDT:USDT", "") for s in symbols]
 
     sel_idx = st.selectbox("Coin sec:", range(len(sym_list)), format_func=lambda i: sym_labels[i])
     selected_sym = sym_list[sel_idx]
@@ -141,33 +135,8 @@ def _render_coin_strategies():
 
 
 def _render_global_leaderboard():
-    """Global strategy ranking across all coins."""
-    session = get_session()
-    try:
-        results = (
-            session.query(
-                StrategyVariant.id,
-                StrategyVariant.name,
-                StrategyVariant.composition,
-                func.avg(StrategyPerformance.composite_score).label("avg_score"),
-                func.avg(StrategyPerformance.win_rate).label("avg_wr"),
-                func.avg(StrategyPerformance.profit_factor).label("avg_pf"),
-                func.sum(StrategyPerformance.total_trades).label("total_trades"),
-                func.count(StrategyPerformance.symbol).label("coin_count"),
-                func.avg(StrategyPerformance.regime_trending_score).label("avg_trend_wr"),
-                func.avg(StrategyPerformance.regime_ranging_score).label("avg_range_wr"),
-                func.avg(StrategyPerformance.regime_volatile_score).label("avg_vol_wr"),
-            )
-            .join(StrategyPerformance, StrategyVariant.id == StrategyPerformance.strategy_variant_id)
-            .filter(StrategyPerformance.composite_score > 0)
-            .group_by(StrategyVariant.id)
-            .having(func.count(StrategyPerformance.symbol) >= 3)  # Min 3 coins tested
-            .order_by(func.avg(StrategyPerformance.composite_score).desc())
-            .limit(50)
-            .all()
-        )
-    finally:
-        session.close()
+    """Global strategy ranking across all coins — cached."""
+    results = get_global_leaderboard_cached()
 
     if not results:
         st.info("Henuz yeterli backtest verisi yok. En az 3 coin'de test edilmis strateji gerekli.")
@@ -175,36 +144,31 @@ def _render_global_leaderboard():
 
     rows = []
     for r in results:
-        try:
-            comp = r.composition if isinstance(r.composition, dict) else {}
-            trend_str = ", ".join(comp.get("trend", []))
-        except (TypeError, AttributeError):
-            trend_str = "?"
-
         rows.append({
-            "ID": r.id,
-            "Strateji": r.name[:35] if r.name else "?",
-            "Ort. Skor": f"{r.avg_score:.4f}",
-            "Ort. WR": f"{r.avg_wr * 100:.1f}%",
-            "Ort. PF": f"{r.avg_pf:.2f}",
-            "Toplam Trade": int(r.total_trades),
-            "Coin Sayisi": int(r.coin_count),
-            "Trend WR": f"{r.avg_trend_wr * 100:.0f}%" if r.avg_trend_wr else "-",
-            "Yatay WR": f"{r.avg_range_wr * 100:.0f}%" if r.avg_range_wr else "-",
-            "Volatil WR": f"{r.avg_vol_wr * 100:.0f}%" if r.avg_vol_wr else "-",
-            "Trend": trend_str[:30],
+            "ID": r["id"],
+            "Strateji": r["name"],
+            "Ort. Skor": f"{r['avg_score']:.4f}",
+            "Ort. WR": f"{r['avg_wr'] * 100:.1f}%",
+            "Ort. PF": f"{r['avg_pf']:.2f}",
+            "Toplam Trade": r["total_trades"],
+            "Coin Sayisi": r["coin_count"],
+            "Trend WR": f"{r['avg_trend_wr'] * 100:.0f}%" if r["avg_trend_wr"] else "-",
+            "Yatay WR": f"{r['avg_range_wr'] * 100:.0f}%" if r["avg_range_wr"] else "-",
+            "Volatil WR": f"{r['avg_vol_wr'] * 100:.0f}%" if r["avg_vol_wr"] else "-",
+            "Trend": r["trend_str"],
         })
 
     st.subheader(f"Global Top {len(rows)} Strateji")
     st.dataframe(pd.DataFrame(rows), width="stretch", height=600)
 
 
-def _render_variant_detail():
-    """Detailed view of a specific strategy variant with regime breakdown."""
+@st.cache_data(ttl=300, show_spinner=False)
+def _get_variant_list_cached() -> list[dict]:
+    """Cache variant list for detail view."""
     session = get_session()
     try:
         variants = session.query(StrategyVariant).order_by(StrategyVariant.id).limit(200).all()
-        variant_data = [
+        return [
             {"id": v.id, "name": v.name, "composition": v.composition,
              "trend_threshold": v.trend_threshold, "entry_threshold": v.entry_threshold,
              "volume_required": v.volume_required}
@@ -212,6 +176,11 @@ def _render_variant_detail():
         ]
     finally:
         session.close()
+
+
+def _render_variant_detail():
+    """Detailed view of a specific strategy variant with regime breakdown."""
+    variant_data = _get_variant_list_cached()
 
     if not variant_data:
         st.info("Henuz strateji varyanti yok.")
@@ -239,7 +208,7 @@ def _render_variant_detail():
 
     st.write(f"Trend threshold: {v['trend_threshold']}, Entry threshold: {v['entry_threshold']}, Volume required: {v['volume_required']}")
 
-    # Performance across coins with regime breakdown
+    # Performance across coins
     session = get_session()
     try:
         perfs = (
@@ -276,12 +245,8 @@ def _render_variant_detail():
 
 
 def _render_correlation_matrix():
-    """Show pairwise correlation heatmap between symbols."""
-    session = get_session()
-    try:
-        correlations = session.query(CorrelationCache).all()
-    finally:
-        session.close()
+    """Show pairwise correlation heatmap between symbols — cached."""
+    correlations = get_correlation_data_cached()
 
     if not correlations:
         st.info("Korelasyon verisi henuz hesaplanmadi. Optimizer ilk calistiginda gorunecek.")
@@ -293,8 +258,8 @@ def _render_correlation_matrix():
     # Build correlation matrix
     symbols = set()
     for c in correlations:
-        symbols.add(c.symbol_a)
-        symbols.add(c.symbol_b)
+        symbols.add(c["symbol_a"])
+        symbols.add(c["symbol_b"])
 
     symbols = sorted(symbols)
     clean_symbols = [s.replace("/USDT:USDT", "") for s in symbols]
@@ -304,11 +269,11 @@ def _render_correlation_matrix():
     sym_idx = {s: i for i, s in enumerate(symbols)}
 
     for c in correlations:
-        i = sym_idx.get(c.symbol_a)
-        j = sym_idx.get(c.symbol_b)
+        i = sym_idx.get(c["symbol_a"])
+        j = sym_idx.get(c["symbol_b"])
         if i is not None and j is not None:
-            matrix[i, j] = c.correlation
-            matrix[j, i] = c.correlation
+            matrix[i, j] = c["correlation"]
+            matrix[j, i] = c["correlation"]
 
     # Plotly heatmap
     import plotly.graph_objects as go
@@ -337,33 +302,25 @@ def _render_correlation_matrix():
     st.plotly_chart(fig, width="stretch")
 
     # High correlation pairs warning
-    high_corr = [c for c in correlations if abs(c.correlation) > 0.7]
+    high_corr = [c for c in correlations if abs(c["correlation"]) > 0.7]
     if high_corr:
         st.warning(f"{len(high_corr)} yuksek korelasyonlu cift (>0.7) - bu ciftlere ayni anda trade acilmaz:")
-        for c in sorted(high_corr, key=lambda x: abs(x.correlation), reverse=True)[:10]:
-            a = c.symbol_a.replace("/USDT:USDT", "")
-            b = c.symbol_b.replace("/USDT:USDT", "")
-            st.caption(f"  {a} <-> {b}: {c.correlation:.3f}")
+        for c in sorted(high_corr, key=lambda x: abs(x["correlation"]), reverse=True)[:10]:
+            a = c["symbol_a"].replace("/USDT:USDT", "")
+            b = c["symbol_b"].replace("/USDT:USDT", "")
+            st.caption(f"  {a} <-> {b}: {c['correlation']:.3f}")
 
 
 def _render_periodic_analysis():
-    """Phase 3: Period-based performance analysis with quarter breakdown."""
-    session = get_session()
-    try:
-        symbols = (
-            session.query(TrackedSymbol)
-            .filter_by(is_active=True)
-            .order_by(TrackedSymbol.rank)
-            .all()
-        )
-        sym_list = [s.symbol for s in symbols]
-        sym_labels = [s.symbol.replace("/USDT:USDT", "") for s in symbols]
-    finally:
-        session.close()
+    """Phase 3: Period-based performance analysis — N+1 fix with join."""
+    symbols = get_active_symbols_cached()
 
-    if not sym_list:
+    if not symbols:
         st.info("Henuz takip edilen coin yok.")
         return
+
+    sym_list = [s["symbol"] for s in symbols]
+    sym_labels = [s["symbol"].replace("/USDT:USDT", "") for s in symbols]
 
     st.subheader("Donemsel Performans Analizi")
     st.caption("Stratejilerin farkli zaman dilimlerindeki performansini karsilastirin")
@@ -381,26 +338,24 @@ def _render_periodic_analysis():
 
     session = get_session()
     try:
-        # Get strategies for this symbol
-        perfs = (
-            session.query(StrategyPerformance)
-            .filter_by(symbol=symbol)
+        # N+1 fix: join StrategyPerformance with StrategyVariant in one query
+        results = (
+            session.query(StrategyPerformance, StrategyVariant.name)
+            .join(StrategyVariant, StrategyPerformance.strategy_variant_id == StrategyVariant.id)
+            .filter(StrategyPerformance.symbol == symbol)
             .filter(StrategyPerformance.total_trades >= 5)
             .order_by(StrategyPerformance.composite_score.desc())
             .limit(10)
             .all()
         )
 
-        if not perfs:
+        if not results:
             st.info("Bu coin icin yeterli strateji verisi yok.")
             return
 
-        # Show strategies with their updated_at info
         rows = []
-        for p in perfs:
-            variant = session.query(StrategyVariant).get(p.strategy_variant_id)
-            name = variant.name[:40] if variant else f"Variant #{p.strategy_variant_id}"
-
+        for p, variant_name in results:
+            name = variant_name[:40] if variant_name else f"Variant #{p.strategy_variant_id}"
             rows.append({
                 "Strateji": name,
                 "Skor": f"{p.composite_score:.4f}",

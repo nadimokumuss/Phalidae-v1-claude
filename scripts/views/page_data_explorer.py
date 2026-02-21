@@ -1,18 +1,20 @@
 """
 Phalidae v2 - Data Explorer Page (Phase 5)
 Raw OHLCV viewer, data coverage matrix, indicator overlay chart.
-Phase 5: Commentary header.
+Optimized: 968 queries -> 1 (cached GROUP BY).
 """
 
 import streamlit as st
 import pandas as pd
 
-from db.engine import get_session
-from db.models import TrackedSymbol, OHLCVData
-from sqlalchemy import func
 from worker.collector import get_ohlcv_df
 from charting import plot_interactive_chart
 from commentary import generate_page_header
+from views.cache import (
+    get_coverage_matrix_cached,
+    get_active_symbols_cached,
+    get_system_stats_cached,
+)
 
 
 def render():
@@ -33,76 +35,59 @@ def render():
 
 
 def _render_coverage_matrix():
-    """Show data coverage: which coin has how many candles per timeframe."""
-    session = get_session()
-    try:
-        symbols = (
-            session.query(TrackedSymbol)
-            .filter_by(is_active=True)
-            .order_by(TrackedSymbol.rank)
-            .all()
-        )
+    """Show data coverage: which coin has how many candles per timeframe.
+    Uses single GROUP BY query instead of 968 individual COUNT queries.
+    """
+    pivot = get_coverage_matrix_cached()
 
-        if not symbols:
-            st.info("Henuz veri yok.")
-            return
+    if pivot.empty:
+        st.info("Henuz veri yok.")
+        return
 
-        timeframes = ["15m", "1h", "4h", "1d"]
-        rows = []
-        for s in symbols:
-            row = {"Coin": s.symbol.replace("/USDT:USDT", "")}
-            for tf in timeframes:
-                cnt = session.query(func.count(OHLCVData.id)).filter_by(
-                    symbol=s.symbol, timeframe=tf
-                ).scalar() or 0
-                row[tf] = cnt
-            rows.append(row)
+    # Determine timeframe columns present
+    timeframes = [tf for tf in ["5m", "15m", "30m", "1h", "4h", "1d"] if tf in pivot.columns]
 
-        df = pd.DataFrame(rows)
+    if not timeframes:
+        st.info("Henuz veri yok.")
+        return
 
-        # Color code: green for >500, yellow for 100-500, red for <100
-        def _style_cell(val):
-            if isinstance(val, (int, float)):
-                if val >= 500:
-                    return "background-color: rgba(38,166,154,0.3)"
-                elif val >= 100:
-                    return "background-color: rgba(255,235,59,0.2)"
-                elif val > 0:
-                    return "background-color: rgba(239,83,80,0.2)"
-            return ""
+    # Build display DataFrame
+    display_df = pivot[["Coin"] + timeframes].copy()
+    display_df = display_df.sort_values("Coin").reset_index(drop=True)
 
-        styled = df.style.map(_style_cell, subset=timeframes)
-        st.dataframe(styled, width="stretch", height=600)
+    # Color code: green for >500, yellow for 100-500, red for <100
+    def _style_cell(val):
+        if isinstance(val, (int, float)):
+            if val >= 500:
+                return "background-color: rgba(38,166,154,0.3)"
+            elif val >= 100:
+                return "background-color: rgba(255,235,59,0.2)"
+            elif val > 0:
+                return "background-color: rgba(239,83,80,0.2)"
+        return ""
 
-        # Summary
-        total = session.query(func.count(OHLCVData.id)).scalar() or 0
-        st.caption(f"Toplam {total:,} mum verisi, {len(symbols)} coin, {len(timeframes)} zaman dilimi")
+    styled = display_df.style.map(_style_cell, subset=timeframes)
+    st.dataframe(styled, width="stretch", height=600)
 
-    finally:
-        session.close()
+    # Summary
+    stats = get_system_stats_cached()
+    symbols = get_active_symbols_cached()
+    st.caption(f"Toplam {stats['total_candles']:,} mum verisi, {len(symbols)} coin, {len(timeframes)} zaman dilimi")
 
 
 def _render_raw_data():
     """Raw OHLCV data viewer."""
-    session = get_session()
-    try:
-        symbols = (
-            session.query(TrackedSymbol)
-            .filter_by(is_active=True)
-            .order_by(TrackedSymbol.rank)
-            .all()
-        )
-    finally:
-        session.close()
+    symbols = get_active_symbols_cached()
 
     if not symbols:
         st.info("Henuz veri yok.")
         return
 
+    sym_list = [s["symbol"] for s in symbols]
+    sym_labels = [s["symbol"].replace("/USDT:USDT", "") for s in symbols]
+
     c1, c2, c3 = st.columns(3)
     with c1:
-        sym_list = [s.symbol for s in symbols]
-        sym_labels = [s.symbol.replace("/USDT:USDT", "") for s in symbols]
         sel_sym = st.selectbox("Coin:", range(len(sym_list)), format_func=lambda i: sym_labels[i])
         symbol = sym_list[sel_sym]
     with c2:
@@ -128,25 +113,17 @@ def _render_raw_data():
 
 def _render_indicator_chart():
     """Interactive chart with indicator overlays from DB data."""
-    session = get_session()
-    try:
-        symbols = (
-            session.query(TrackedSymbol)
-            .filter_by(is_active=True)
-            .order_by(TrackedSymbol.rank)
-            .all()
-        )
-    finally:
-        session.close()
+    symbols = get_active_symbols_cached()
 
     if not symbols:
         st.info("Henuz veri yok.")
         return
 
+    sym_list = [s["symbol"] for s in symbols]
+    sym_labels = [s["symbol"].replace("/USDT:USDT", "") for s in symbols]
+
     c1, c2 = st.columns(2)
     with c1:
-        sym_list = [s.symbol for s in symbols]
-        sym_labels = [s.symbol.replace("/USDT:USDT", "") for s in symbols]
         sel_sym = st.selectbox("Coin (grafik):", range(len(sym_list)), format_func=lambda i: sym_labels[i], key="chart_coin")
         symbol = sym_list[sel_sym]
     with c2:

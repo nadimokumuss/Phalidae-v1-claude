@@ -9,10 +9,10 @@ import pandas as pd
 
 from signal_generator import (
     scan_market, analyze_symbol, fetch_ohlcv, _init_exchange,
-    get_recent_signals_from_db,
 )
 from charting import plot_interactive_chart
 from commentary import generate_page_header
+from views.cache import get_recent_signals_cached
 
 
 def render():
@@ -32,8 +32,8 @@ def render():
 
 
 def _render_db_signals():
-    """Show recent signals from database."""
-    signals = get_recent_signals_from_db(limit=100)
+    """Show recent signals from database — cached (TTL=60s)."""
+    signals = get_recent_signals_cached(limit=100)
 
     if not signals:
         st.info("Henuz otomatik sinyal uretilmedi. Analyzer ilk calistiginda burada gorunecek.")

@@ -89,10 +89,10 @@ def _general_commentary(session) -> str:
     if signal_count > 0:
         parts.append(f"Bugun {signal_count} sinyal ({long_count} LONG, {signal_count - long_count} SHORT)")
 
-    # Portfolio
+    # Portfolio (cached)
     try:
-        from paper_trader.portfolio import get_portfolio_summary
-        ps = get_portfolio_summary()
+        from views.cache import get_portfolio_summary_cached
+        ps = get_portfolio_summary_cached()
         parts.append(f"Portfolio: ${ps['equity']:,.0f} ({ps['total_pnl_pct']:+.1f}%)")
     except Exception:
         pass
@@ -165,35 +165,28 @@ def generate_page_header(page_name: str):
     with col2:
         st.caption(f"Son guncelleme: {now.strftime('%H:%M')} UTC")
 
-    # Check for warnings
-    session = get_session()
+    # Check for warnings (cached)
     try:
-        # High drawdown warning
-        try:
-            from paper_trader.portfolio import get_portfolio_summary
-            ps = get_portfolio_summary()
-            if ps["total_pnl_pct"] < -10:
-                st.error(f"Yuksek drawdown: {ps['total_pnl_pct']:.1f}%")
-            elif ps["daily_pnl"] < -30:
-                st.warning(f"Gunluk kayip: ${ps['daily_pnl']:+.2f}")
-        except Exception:
-            pass
-
-        # Stale agent warning
-        last_hour = now - timedelta(hours=1)
-        recent_collector = session.query(AgentJob).filter(
-            AgentJob.job_name == "collector",
-            AgentJob.status == "SUCCESS",
-            AgentJob.completed_at >= last_hour,
-        ).first()
-
-        if recent_collector is None:
-            last_collector = session.query(AgentJob).filter(
-                AgentJob.job_name == "collector",
-            ).order_by(AgentJob.completed_at.desc()).first()
-            if last_collector and last_collector.completed_at:
-                st.warning(f"Collector son calistigi zaman: {last_collector.completed_at.strftime('%H:%M')} UTC")
+        from views.cache import get_portfolio_summary_cached, get_agent_health_cached
+        ps = get_portfolio_summary_cached()
+        if ps["total_pnl_pct"] < -10:
+            st.error(f"Yuksek drawdown: {ps['total_pnl_pct']:.1f}%")
+        elif ps["daily_pnl"] < -30:
+            st.warning(f"Gunluk kayip: ${ps['daily_pnl']:+.2f}")
     except Exception:
         pass
-    finally:
-        session.close()
+
+    try:
+        from views.cache import get_agent_health_cached
+        health = get_agent_health_cached()
+        collector_info = health["jobs"].get("collector")
+        if collector_info and collector_info["completed_at"]:
+            from datetime import datetime as _dt
+            completed = _dt.fromisoformat(collector_info["completed_at"])
+            age_min = (now - completed).total_seconds() / 60
+            if age_min > 60:
+                st.warning(f"Collector son calistigi zaman: {completed.strftime('%H:%M')} UTC")
+        elif collector_info is None:
+            pass  # No collector runs yet
+    except Exception:
+        pass
