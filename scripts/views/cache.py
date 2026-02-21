@@ -255,6 +255,39 @@ def get_signal_counts_cached() -> dict:
 # Market Data (TTL=120s)
 # ---------------------------------------------------------------------------
 
+@st.cache_data(ttl=60, show_spinner=False)
+def get_ohlcv_cached(symbol: str, timeframe: str, limit: int = 300) -> list[dict]:
+    """OHLCV verisini Lightweight Charts formatinda doner.
+    Her dict: {time: unix_seconds, open, high, low, close, volume}
+    """
+    session = get_session()
+    try:
+        rows = (
+            session.query(OHLCVData)
+            .filter_by(symbol=symbol, timeframe=timeframe)
+            .order_by(OHLCVData.timestamp.desc())
+            .limit(limit)
+            .all()
+        )
+    finally:
+        session.close()
+
+    if not rows:
+        return []
+
+    return [
+        {
+            "time": int(r.timestamp.replace(tzinfo=None).timestamp()) if r.timestamp else 0,
+            "open": float(r.open),
+            "high": float(r.high),
+            "low": float(r.low),
+            "close": float(r.close),
+            "volume": float(r.volume),
+        }
+        for r in reversed(rows)
+    ]
+
+
 @st.cache_data(ttl=120, show_spinner=False)
 def get_regime_map_cached() -> list[dict]:
     """Son rejim/coin — subquery pattern."""
