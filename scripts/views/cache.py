@@ -136,9 +136,15 @@ def get_system_stats_cached() -> dict:
         open_trades = session.query(PaperTrade).filter_by(status="OPEN").count()
         total_signals = session.query(func.count(Signal.id)).scalar() or 0
         closed_trades = session.query(PaperTrade).filter(PaperTrade.status != "OPEN").count()
-        total_pnl = session.query(func.sum(PaperTrade.pnl_usd)).filter(
+        # Kapali trade P&L
+        closed_pnl = session.query(func.sum(PaperTrade.pnl_usd)).filter(
             PaperTrade.status != "OPEN"
         ).scalar() or 0
+        # Acik tradelerdeki partial TP P&L (portfolio equity'ye dahil)
+        partial_pnl = session.query(func.sum(PaperTrade.partial_tp_pnl)).filter(
+            PaperTrade.status == "OPEN"
+        ).scalar() or 0
+        total_pnl = float(closed_pnl) + float(partial_pnl)
 
         return {
             "total_candles": int(total_candles),
