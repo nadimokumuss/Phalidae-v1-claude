@@ -164,7 +164,7 @@ These files are protected by a pre-commit hook (see [Hooks](#hooks) section). An
 | TF weights | 5m=0.05, 15m=0.10, 30m=0.15, 1h=0.25, 4h=0.35 | analyzer.py, signal_generator.py |
 | Bias threshold | +/-2.0 total score | analyzer.py |
 | Max open trades/symbol | 1 | trader.py |
-| Max total open trades | 55 | trader.py, portfolio.py |
+| Max total open trades | 150 | trader.py, portfolio.py |
 | Max correlation | 0.95 | trader.py |
 | Daily drawdown limit | 10% (per coin, configurable) | trader.py |
 | Initial capital | 100,000 USD (learning mode) | portfolio.py |
@@ -182,13 +182,16 @@ These files are protected by a pre-commit hook (see [Hooks](#hooks) section). An
 | DB pool size | 10 + 20 overflow | engine.py |
 | DB pool timeout | 30 seconds | engine.py |
 | DB pool recycle | 1800 seconds (30 min) | engine.py |
+| Min quote volume filter | $5M 24h | collector.py |
+| Max spread filter | 0.15% | collector.py |
+| Tracked coins | ~120-150 (filtered) | collector.py |
 
 ## System Architecture
 
 ### Signal Generation Flow (Analyzer - every 5 min)
 
 ```
-For each of 55 active coins:
+For each of ~120-150 active coins (filtered):
   1. Load OHLCV data for 5 timeframes (5m, 15m, 30m, 1h, 4h)
   2. Compute all 67 indicators on each timeframe
   3. Score all 45 criteria on each timeframe

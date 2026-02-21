@@ -79,8 +79,46 @@ def _finish_agent_job(job_id: int, status: str, records: int = 0, error: str = N
         session.close()
 
 
-def refresh_tracked_symbols(top_n: int = 50):
-    """Update tracked symbols list based on volume ranking.
+# Leveraged token ve stablecoin sembollerini filtrele
+_SYMBOL_BLACKLIST_TOKENS = {"UP", "DOWN", "BULL", "BEAR"}
+_STABLECOIN_BASES = {"USDC", "TUSD", "DAI", "FDUSD", "USDP", "BUSD", "PYUSD", "AEUR", "EURI"}
+
+MIN_QUOTE_VOLUME = 5_000_000    # $5M minimum 24h hacim
+MAX_SPREAD_PCT = 0.15           # %0.15 max bid-ask spread
+
+
+def _is_filtered_coin(symbol: str, ticker: dict) -> bool:
+    """Filter out scam-prone and low-quality coins."""
+    base = symbol.split("/")[0]
+
+    # 1) Leveraged tokenları kaldır (BTCUP, ETHDOWN, vs.)
+    for token in _SYMBOL_BLACKLIST_TOKENS:
+        if base.endswith(token):
+            return True
+
+    # 2) Stablecoin perpetuallarını kaldır
+    if base in _STABLECOIN_BASES:
+        return True
+
+    # 3) Minimum hacim kontrolü ($5M)
+    volume = ticker.get("quoteVolume", 0) or 0
+    if volume < MIN_QUOTE_VOLUME:
+        return True
+
+    # 4) Bid-ask spread kontrolü (<%0.15)
+    bid = ticker.get("bid", 0) or 0
+    ask = ticker.get("ask", 0) or 0
+    if bid > 0 and ask > 0:
+        mid = (bid + ask) / 2
+        spread_pct = ((ask - bid) / mid) * 100
+        if spread_pct > MAX_SPREAD_PCT:
+            return True
+
+    return False
+
+
+def refresh_tracked_symbols(top_n: int = 0):
+    """Update tracked symbols list. top_n=0 means all that pass filters.
     Auto-backfills newly added symbols so indicators have enough bars.
     """
     exchange = _get_exchange()
@@ -91,11 +129,15 @@ def refresh_tracked_symbols(top_n: int = 50):
         return
 
     usdt_pairs = []
+    filtered = 0
     for sym, t in tickers.items():
         if sym.endswith("/USDT:USDT"):
+            if _is_filtered_coin(sym, t):
+                filtered += 1
+                continue
             usdt_pairs.append((sym, t.get("quoteVolume", 0) or 0))
     usdt_pairs.sort(key=lambda x: x[1], reverse=True)
-    top_symbols = usdt_pairs[:top_n]
+    top_symbols = usdt_pairs[:top_n] if top_n > 0 else usdt_pairs
 
     new_symbols = []
     session = get_session()
@@ -113,7 +155,7 @@ def refresh_tracked_symbols(top_n: int = 50):
                 new_symbols.append(sym)
 
         session.commit()
-        logger.info(f"Refreshed {len(top_symbols)} tracked symbols ({len(new_symbols)} new)")
+        logger.info(f"Refreshed {len(top_symbols)} tracked symbols ({len(new_symbols)} new, {filtered} filtered out)")
     except Exception as e:
         session.rollback()
         logger.error(f"Symbol refresh error: {e}")
@@ -237,7 +279,7 @@ def collect_incremental():
     if not symbol_list:
         logger.warning("No active symbols — auto-refreshing symbol list...")
         try:
-            refresh_tracked_symbols(top_n=50)
+            refresh_tracked_symbols()
             session = get_session()
             try:
                 symbols = session.query(TrackedSymbol).filter_by(is_active=True).all()
@@ -271,7 +313,7 @@ def collect_incremental():
 def initial_setup():
     """First-time setup: refresh symbols and backfill all."""
     logger.info("Starting initial data setup...")
-    refresh_tracked_symbols(top_n=50)
+    refresh_tracked_symbols()
 
     session = get_session()
     try:

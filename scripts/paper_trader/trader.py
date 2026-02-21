@@ -19,7 +19,7 @@ logger = logging.getLogger("phalidae.trader")
 DEFAULT_LEVERAGE = 5.0
 DEFAULT_POSITION_SIZE = 200.0
 MAX_OPEN_TRADES_PER_SYMBOL = 1
-MAX_TOTAL_OPEN_TRADES = 55
+MAX_TOTAL_OPEN_TRADES = 150
 MAX_CORRELATION = 0.95  # Max allowed correlation with existing open trades
 
 

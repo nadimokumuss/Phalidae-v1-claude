@@ -16,8 +16,8 @@ logger = logging.getLogger("phalidae.portfolio")
 
 INITIAL_CAPITAL = 100_000.0
 MAX_RISK_PER_TRADE_PCT = 1.0          # Small positions, many trades (learning mode)
-MAX_TOTAL_EXPOSURE_PCT = 90.0          # 55 coins x $200 = $11K, plenty of room
-MAX_OPEN_POSITIONS = 55                # 55 active coins = theoretical max
+MAX_TOTAL_EXPOSURE_PCT = 90.0          # ~150 coins x $200 = $30K, plenty of room
+MAX_OPEN_POSITIONS = 150               # ~120-150 active coins = theoretical max
 MAX_DAILY_LOSS_PCT = 15.0              # Learning mode: higher tolerance
 
 

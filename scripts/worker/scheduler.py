@@ -72,7 +72,7 @@ def _job_market_data():
 def _job_refresh_symbols():
     from worker.collector import refresh_tracked_symbols
     try:
-        refresh_tracked_symbols(top_n=50)
+        refresh_tracked_symbols()
     except Exception as e:
         logger.error(f"Symbol refresh job error: {e}")
 
