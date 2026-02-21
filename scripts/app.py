@@ -107,14 +107,15 @@ def _sidebar_scheduler_status():
     from worker.scheduler import get_scheduler_status
     status = get_scheduler_status()
     if status["running"]:
-        st.sidebar.success("Sistem aktif")
+        st.success("Sistem aktif")
         for job in status["jobs"]:
             next_run = job["next_run"][:19] if job["next_run"] else "?"
-            st.sidebar.caption(f"{job['name']}: {next_run}")
+            st.caption(f"{job['name']}: {next_run}")
     else:
-        st.sidebar.warning("Scheduler baslatiliyor...")
+        st.warning("Scheduler baslatiliyor...")
 
-_sidebar_scheduler_status()
+with st.sidebar:
+    _sidebar_scheduler_status()
 
 # ─── Page Router ───
 if page == "Dashboard":
