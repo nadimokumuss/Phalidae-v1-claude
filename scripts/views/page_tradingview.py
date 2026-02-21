@@ -6,13 +6,14 @@ TradingView Lightweight Charts v4 ile OHLCV + trade overlay.
 import json
 import streamlit as st
 import streamlit.components.v1 as components
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from commentary import generate_page_header
 from views.cache import (
     get_ohlcv_cached,
     get_open_trades_cached,
     get_closed_trades_cached,
+    get_recent_signals_cached,
 )
 
 
@@ -21,7 +22,7 @@ def render():
     st.title("TradingView Canli Grafik")
     st.caption("Bot islemlerini canli grafik uzerinde takip edin.")
 
-    # --- Kontroller ---
+    # --- Veri yukle ---
     open_trades = get_open_trades_cached()
 
     if not open_trades:
@@ -36,8 +37,21 @@ def render():
         if candles:
             latest_prices[sym] = candles[-1]["close"]
 
+    # --- [1] Portfoy Ozet Dashboard ---
+    _render_portfolio_summary(open_trades, latest_prices)
+
+    # --- [6] Zaman bazli filtre ---
+    filter_options = ["Tumu", "Son 1 saat", "Son 4 saat", "Son 1 gun", "Son 3 gun"]
+    selected_filter = st.selectbox("Zaman Filtresi", filter_options, index=0)
+    filtered_trades = _filter_trades_by_time(open_trades, selected_filter)
+
+    if not filtered_trades:
+        st.info("Secilen zaman araliginda acik islem bulunamadi.")
+        return
+
+    # P&L hesaplama (filtrelenmis)
     symbol_pnl: dict[str, float] = {}
-    for t in open_trades:
+    for t in filtered_trades:
         sym = t["symbol"]
         entry = t["entry_price"]
         leverage = t.get("leverage", 5.0)
@@ -49,7 +63,6 @@ def render():
                 pnl = ((entry - price) / entry) * 100 * leverage
         else:
             pnl = 0.0
-        # Coin basina toplam P&L (birden fazla pozisyon varsa toplam)
         symbol_pnl[sym] = symbol_pnl.get(sym, 0) + pnl
 
     sorted_symbols = sorted(symbol_pnl.keys(), key=lambda s: symbol_pnl[s], reverse=True)
@@ -58,6 +71,7 @@ def render():
         for s in sorted_symbols
     ]
 
+    # --- Kontroller ---
     col1, col2, col3 = st.columns([2, 1, 2])
     with col1:
         sel_idx = st.selectbox(
@@ -73,37 +87,213 @@ def render():
     with col3:
         candle_count = st.slider("Mum Sayisi", 100, 1000, 300, step=50)
 
-    # --- Grafik (auto-refresh fragment) ---
-    @st.fragment(run_every=60)
-    def _chart_fragment():
-        ohlcv = get_ohlcv_cached(selected_symbol, selected_tf, candle_count)
-        if not ohlcv:
-            st.info(f"{coin_name} / {selected_tf} icin veri bulunamadi.")
-            return
+    # --- [4] 4'lu gorunum toggle ---
+    grid_mode = st.toggle("4'lu Gorunum", value=False)
 
-        # Trade verileri
-        open_trades = [
-            t for t in get_open_trades_cached() if t["symbol"] == selected_symbol
-        ]
-        closed_trades = [
-            t for t in get_closed_trades_cached(limit=50)
-            if t["symbol"] == selected_symbol
-        ][:20]
+    # --- [5] SL/TP yakinlik uyarilari ---
+    _render_proximity_alerts(filtered_trades, latest_prices)
 
-        # Son fiyat (unrealized P&L icin)
-        current_price = ohlcv[-1]["close"] if ohlcv else 0
+    # --- [4] 4'lu grid VEYA tekli grafik ---
+    if grid_mode:
+        _render_mini_grid(sorted_symbols[:4], latest_prices, filtered_trades)
+    else:
+        # --- Tekli grafik (auto-refresh fragment) ---
+        @st.fragment(run_every=60)
+        def _chart_fragment():
+            ohlcv = get_ohlcv_cached(selected_symbol, selected_tf, candle_count)
+            if not ohlcv:
+                st.info(f"{coin_name} / {selected_tf} icin veri bulunamadi.")
+                return
 
-        # Overlay verileri
-        price_lines = _build_price_lines(open_trades, current_price)
-        markers = _build_markers(open_trades, closed_trades, ohlcv)
+            # Trade verileri
+            sym_open_trades = [
+                t for t in get_open_trades_cached() if t["symbol"] == selected_symbol
+            ]
+            closed_trades = [
+                t for t in get_closed_trades_cached(limit=50)
+                if t["symbol"] == selected_symbol
+            ][:20]
 
-        html = _build_chart_html(ohlcv, price_lines, markers, coin_name, selected_tf)
-        components.html(html, height=560, scrolling=False)
+            # Sinyal verileri [3]
+            sym_signals = [
+                s for s in get_recent_signals_cached(limit=100)
+                if s["symbol"] == selected_symbol
+            ][:20]
 
-        # Trade info paneli
-        _render_trade_info(open_trades, closed_trades, current_price)
+            # Son fiyat (unrealized P&L icin)
+            current_price = ohlcv[-1]["close"] if ohlcv else 0
 
-    _chart_fragment()
+            # EMA hesapla [2]
+            ema21 = _calc_ema(ohlcv, 21)
+            ema55 = _calc_ema(ohlcv, 55)
+
+            # Overlay verileri
+            price_lines = _build_price_lines(sym_open_trades, current_price)
+            markers = _build_markers(sym_open_trades, closed_trades, ohlcv, sym_signals)
+
+            html = _build_chart_html(
+                ohlcv, price_lines, markers, coin_name, selected_tf,
+                ema21=ema21, ema55=ema55,
+            )
+            components.html(html, height=560, scrolling=False)
+
+            # Trade info paneli
+            _render_trade_info(sym_open_trades, closed_trades, current_price)
+
+        _chart_fragment()
+
+
+# ---------------------------------------------------------------------------
+# [1] Portfoy Ozet Dashboard
+# ---------------------------------------------------------------------------
+
+def _render_portfolio_summary(trades: list[dict], latest_prices: dict[str, float]):
+    """Sayfa basinda portfoy ozet metrikleri."""
+    total_pnl_usd = 0.0
+    total_cost = 0.0
+    sym_pnl: dict[str, float] = {}
+
+    for t in trades:
+        sym = t["symbol"]
+        entry = t["entry_price"]
+        leverage = t.get("leverage", 5.0)
+        size_usd = t.get("position_size_usd") or 200
+        price = latest_prices.get(sym, 0)
+
+        if price and entry:
+            if t["bias"] == "LONG":
+                pnl_pct = ((price - entry) / entry) * 100 * leverage
+            else:
+                pnl_pct = ((entry - price) / entry) * 100 * leverage
+            pnl_usd = size_usd * (pnl_pct / 100)
+        else:
+            pnl_pct = 0.0
+            pnl_usd = 0.0
+
+        total_pnl_usd += pnl_usd
+        total_cost += size_usd
+        coin_short = sym.replace("/USDT:USDT", "")
+        sym_pnl[coin_short] = sym_pnl.get(coin_short, 0) + pnl_pct
+
+    total_pnl_pct = (total_pnl_usd / total_cost * 100) if total_cost else 0.0
+    avg_pnl = sum(sym_pnl.values()) / len(sym_pnl) if sym_pnl else 0.0
+    best_coin = max(sym_pnl, key=sym_pnl.get) if sym_pnl else "-"
+    worst_coin = min(sym_pnl, key=sym_pnl.get) if sym_pnl else "-"
+    best_val = sym_pnl.get(best_coin, 0)
+    worst_val = sym_pnl.get(worst_coin, 0)
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Acik Islem", len(trades))
+    c2.metric("Toplam P&L", f"${total_pnl_usd:+,.2f}", delta=f"{total_pnl_pct:+.2f}%")
+    c3.metric(f"En Karli: {best_coin}", f"{best_val:+.1f}%")
+    c4.metric(f"En Zararli: {worst_coin}", f"{worst_val:+.1f}%")
+    c5.metric("Ort. P&L", f"{avg_pnl:+.2f}%")
+    st.divider()
+
+
+# ---------------------------------------------------------------------------
+# [6] Zaman bazli filtre
+# ---------------------------------------------------------------------------
+
+def _filter_trades_by_time(trades: list[dict], filter_label: str) -> list[dict]:
+    """Trade'leri opened_at alanina gore filtrele."""
+    if filter_label == "Tumu":
+        return trades
+
+    hours_map = {
+        "Son 1 saat": 1,
+        "Son 4 saat": 4,
+        "Son 1 gun": 24,
+        "Son 3 gun": 72,
+    }
+    hours = hours_map.get(filter_label, 0)
+    if not hours:
+        return trades
+
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    result = []
+    for t in trades:
+        opened_at = t.get("opened_at", "")
+        if not opened_at:
+            continue
+        try:
+            # Format: "MM-DD HH:MM"
+            dt = datetime.strptime(opened_at, "%m-%d %H:%M").replace(year=datetime.utcnow().year)
+            if dt > cutoff:
+                result.append(t)
+        except (ValueError, TypeError):
+            # ISO format fallback
+            try:
+                dt = datetime.fromisoformat(opened_at)
+                if dt.replace(tzinfo=None) > cutoff:
+                    result.append(t)
+            except (ValueError, TypeError):
+                result.append(t)  # parse edemezse dahil et
+    return result
+
+
+# ---------------------------------------------------------------------------
+# [5] SL/TP Yakinlik Uyarisi
+# ---------------------------------------------------------------------------
+
+def _render_proximity_alerts(trades: list[dict], latest_prices: dict[str, float]):
+    """SL veya TP'ye %2'den yakin trade'ler icin uyari goster."""
+    alerts = []
+    for t in trades:
+        sym = t["symbol"]
+        coin = sym.replace("/USDT:USDT", "")
+        price = latest_prices.get(sym, 0)
+        if not price:
+            continue
+
+        sl = t.get("sl_price") or 0
+        tp = t.get("tp_price") or t.get("tp2_price") or 0
+        trail = t.get("trailing_stop_price") or 0
+        effective_sl = trail if trail else sl
+
+        if effective_sl and effective_sl > 0:
+            sl_dist = abs(price - effective_sl) / price * 100
+            if sl_dist <= 2.0:
+                alerts.append(("danger", f"{coin}: SL'ye %{sl_dist:.1f} kaldi!"))
+
+        if tp and tp > 0:
+            tp_dist = abs(tp - price) / price * 100
+            if tp_dist <= 2.0:
+                alerts.append(("success", f"{coin}: TP'ye %{tp_dist:.1f} kaldi!"))
+
+    for kind, msg in alerts:
+        if kind == "danger":
+            st.warning(msg)
+        else:
+            st.success(msg)
+
+
+# ---------------------------------------------------------------------------
+# [2] EMA hesaplama
+# ---------------------------------------------------------------------------
+
+def _calc_ema(ohlcv: list[dict], period: int) -> list[dict]:
+    """OHLCV verisinden EMA hesapla. {time, value} formatinda doner."""
+    if not ohlcv or len(ohlcv) < period:
+        return []
+
+    closes = [c["close"] for c in ohlcv]
+    multiplier = 2.0 / (period + 1)
+
+    # Ilk EMA = ilk 'period' mum ortalamasi
+    ema_values = []
+    sma = sum(closes[:period]) / period
+    ema_values.append(sma)
+    for i in range(period, len(closes)):
+        ema_val = (closes[i] - ema_values[-1]) * multiplier + ema_values[-1]
+        ema_values.append(ema_val)
+
+    # time esle — ilk period-1 mum icin EMA yok
+    result = []
+    for i, val in enumerate(ema_values):
+        idx = period - 1 + i
+        result.append({"time": ohlcv[idx]["time"], "value": round(val, 8)})
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -181,15 +371,16 @@ def _build_price_lines(open_trades: list[dict], current_price: float) -> list[di
 
 
 # ---------------------------------------------------------------------------
-# Markers (ok isaretleri — giris/cikis)
+# Markers (giris/cikis oklari + sinyal gecmisi)
 # ---------------------------------------------------------------------------
 
 def _build_markers(
     open_trades: list[dict],
     closed_trades: list[dict],
     ohlcv: list[dict],
+    signals: list[dict] | None = None,
 ) -> list[dict]:
-    """Trade giris/cikis noktalarini marker olarak doner."""
+    """Trade giris/cikis + sinyal gecmisi marker'lari."""
     markers = []
     if not ohlcv or len(ohlcv) < 2:
         return markers
@@ -275,13 +466,30 @@ def _build_markers(
                 "text": f"{pnl:+.1f}%",
             })
 
+    # [3] Sinyal gecmisi marker'lari (kare seklinde, transparan renk)
+    if signals:
+        for s in signals:
+            sig_time = _find_nearest_time(s.get("created_at"), None)
+            if sig_time is None:
+                continue
+            is_long = s.get("bias") == "LONG"
+            score = s.get("score", 0)
+            score_str = f"S {score:+.1f}" if score else "S"
+            markers.append({
+                "time": sig_time,
+                "position": "aboveBar" if is_long else "belowBar",
+                "color": "rgba(38,166,154,0.5)" if is_long else "rgba(239,83,80,0.5)",
+                "shape": "square",
+                "text": score_str,
+            })
+
     # Zamana gore sirala (Lightweight Charts gerekliligi)
     markers.sort(key=lambda m: m["time"])
     return markers
 
 
 # ---------------------------------------------------------------------------
-# Chart HTML (Lightweight Charts v4)
+# Chart HTML (Lightweight Charts v4) — EMA overlay eklendi [2]
 # ---------------------------------------------------------------------------
 
 def _build_chart_html(
@@ -290,6 +498,8 @@ def _build_chart_html(
     markers: list[dict],
     coin_name: str,
     timeframe: str,
+    ema21: list[dict] | None = None,
+    ema55: list[dict] | None = None,
 ) -> str:
     """TradingView Lightweight Charts v4 HTML — CDN'den yuklenir."""
     ohlcv_json = json.dumps(ohlcv)
@@ -304,6 +514,8 @@ def _build_chart_html(
     ])
     price_lines_json = json.dumps(price_lines)
     markers_json = json.dumps(markers)
+    ema21_json = json.dumps(ema21 or [])
+    ema55_json = json.dumps(ema55 or [])
 
     return f"""
 <!DOCTYPE html>
@@ -381,6 +593,32 @@ def _build_chart_html(
   }});
   volumeSeries.setData({volume_data});
 
+  // EMA 21 (sari) [2]
+  const ema21Data = {ema21_json};
+  if (ema21Data.length > 0) {{
+    const ema21Series = chart.addLineSeries({{
+      color: '#FFD700',
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    }});
+    ema21Series.setData(ema21Data);
+  }}
+
+  // EMA 55 (mor) [2]
+  const ema55Data = {ema55_json};
+  if (ema55Data.length > 0) {{
+    const ema55Series = chart.addLineSeries({{
+      color: '#AB47BC',
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    }});
+    ema55Series.setData(ema55Data);
+  }}
+
   // Price lines (entry/TP/SL)
   const priceLines = {price_lines_json};
   priceLines.forEach(function(pl) {{
@@ -394,7 +632,7 @@ def _build_chart_html(
     }});
   }});
 
-  // Markers (trade entry/exit arrows)
+  // Markers (trade entry/exit arrows + signals)
   const markers = {markers_json};
   if (markers.length > 0) {{
     candleSeries.setMarkers(markers);
@@ -433,6 +671,115 @@ def _build_chart_html(
 </body>
 </html>
 """
+
+
+# ---------------------------------------------------------------------------
+# [4] Mini grafik (4'lu grid icin)
+# ---------------------------------------------------------------------------
+
+def _build_mini_chart_html(
+    ohlcv: list[dict],
+    price_lines: list[dict],
+    coin_name: str,
+    timeframe: str,
+) -> str:
+    """4'lu grid icin kucuk candlestick grafik — sadece mumlar + entry/SL cizgileri."""
+    ohlcv_json = json.dumps(ohlcv)
+    price_lines_json = json.dumps(price_lines)
+
+    return f"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  body {{ margin: 0; padding: 0; background: #0e1117; overflow: hidden; }}
+  #chart {{ width: 100%; height: 240px; }}
+  #label {{
+    position: absolute; top: 4px; left: 8px; z-index: 10;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
+    font-size: 11px; font-weight: 600; color: #d1d4dc; pointer-events: none;
+  }}
+</style>
+</head>
+<body>
+<div id="label">{coin_name} / {timeframe}</div>
+<div id="chart"></div>
+<script>
+(function() {{
+  const chartEl = document.getElementById('chart');
+  const chart = LightweightCharts.createChart(chartEl, {{
+    width: chartEl.clientWidth,
+    height: 240,
+    layout: {{
+      background: {{ type: 'solid', color: '#0e1117' }},
+      textColor: '#999',
+    }},
+    grid: {{
+      vertLines: {{ color: 'rgba(42,46,57,0.3)' }},
+      horzLines: {{ color: 'rgba(42,46,57,0.3)' }},
+    }},
+    rightPriceScale: {{ borderColor: 'rgba(197,203,206,0.2)', visible: true }},
+    timeScale: {{ borderColor: 'rgba(197,203,206,0.2)', timeVisible: true, secondsVisible: false }},
+    handleScroll: false,
+    handleScale: false,
+  }});
+
+  const candleSeries = chart.addCandlestickSeries({{
+    upColor: '#26a69a', downColor: '#ef5350',
+    borderDownColor: '#ef5350', borderUpColor: '#26a69a',
+    wickDownColor: '#ef5350', wickUpColor: '#26a69a',
+  }});
+  candleSeries.setData({ohlcv_json});
+
+  const priceLines = {price_lines_json};
+  priceLines.forEach(function(pl) {{
+    candleSeries.createPriceLine({{
+      price: pl.price, color: pl.color,
+      lineWidth: pl.lineWidth, lineStyle: pl.lineStyle,
+      axisLabelVisible: true, title: pl.title,
+    }});
+  }});
+
+  chart.timeScale().fitContent();
+  new ResizeObserver(function() {{
+    chart.applyOptions({{ width: chartEl.clientWidth }});
+  }}).observe(chartEl);
+}})();
+</script>
+</body>
+</html>
+"""
+
+
+def _render_mini_grid(
+    symbols: list[str],
+    latest_prices: dict[str, float],
+    trades: list[dict],
+):
+    """4'lu grid: ilk 4 coin icin kucuk grafik goster."""
+    if not symbols:
+        st.info("Gosterilecek coin yok.")
+        return
+
+    rows = [symbols[:2], symbols[2:4]] if len(symbols) > 2 else [symbols]
+    for row_syms in rows:
+        cols = st.columns(len(row_syms))
+        for i, sym in enumerate(row_syms):
+            coin_name = sym.replace("/USDT:USDT", "")
+            ohlcv = get_ohlcv_cached(sym, "1h", 150)
+            if not ohlcv:
+                cols[i].info(f"{coin_name}: veri yok")
+                continue
+
+            current_price = ohlcv[-1]["close"]
+            sym_trades = [t for t in trades if t["symbol"] == sym]
+            price_lines = _build_price_lines(sym_trades, current_price)
+
+            html = _build_mini_chart_html(ohlcv, price_lines, coin_name, "1h")
+            with cols[i]:
+                components.html(html, height=260, scrolling=False)
 
 
 # ---------------------------------------------------------------------------
