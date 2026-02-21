@@ -184,14 +184,14 @@ These files are protected by a pre-commit hook (see [Hooks](#hooks) section). An
 | DB pool recycle | 1800 seconds (30 min) | engine.py |
 | Min quote volume filter | $5M 24h | collector.py |
 | Max spread filter | 0.15% | collector.py |
-| Tracked coins | ~120-150 (filtered) | collector.py |
+| Tracked coins | ~242 (filtered) | collector.py |
 
 ## System Architecture
 
 ### Signal Generation Flow (Analyzer - every 5 min)
 
 ```
-For each of ~120-150 active coins (filtered):
+For each of ~242 active coins (filtered):
   1. Load OHLCV data for 5 timeframes (5m, 15m, 30m, 1h, 4h)
   2. Compute all 67 indicators on each timeframe
   3. Score all 45 criteria on each timeframe
