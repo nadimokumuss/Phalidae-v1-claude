@@ -301,8 +301,15 @@ def _update_paper_stats(session, trade: PaperTrade):
         return
 
     total = len(closed_trades)
-    wins = sum(1 for t in closed_trades if t.pnl_usd > 0)
-    total_pnl = sum(t.pnl_percent for t in closed_trades)
+    # Include partial TP P&L in win/loss determination and total P&L
+    wins = sum(1 for t in closed_trades if (t.pnl_usd + (t.partial_tp_pnl or 0)) > 0)
+    total_pnl = 0.0
+    for t in closed_trades:
+        total_trade_usd = t.pnl_usd + (t.partial_tp_pnl or 0)
+        # If partial TP was taken, original position was 2x current (50% closed at TP1)
+        original_size = t.position_size_usd * 2 if t.partial_tp_taken else t.position_size_usd
+        trade_pnl_pct = (total_trade_usd / original_size * 100) if original_size > 0 else 0
+        total_pnl += trade_pnl_pct
 
     perf.paper_total = total
     perf.paper_wins = wins

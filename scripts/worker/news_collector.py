@@ -90,6 +90,8 @@ def collect_news():
                         sentiment = "bearish"
                     else:
                         sentiment = "neutral"
+                    # impact_score = negativity ratio (neg/total), used as risk indicator
+                    # Higher value = more negative votes = higher risk. Name kept for DB compatibility.
                     impact_score = round(neg / total_votes, 3)
                 else:
                     sentiment = "neutral"
@@ -207,6 +209,7 @@ def backfill_news(pages: int = 5):
                             sentiment = "bearish"
                         else:
                             sentiment = "neutral"
+                        # impact_score = negativity ratio (neg/total), used as risk indicator
                         impact_score = round(neg / total_votes, 3)
                     else:
                         sentiment = "neutral"

@@ -125,12 +125,15 @@ def _simulate_trade(
             max_favorable = max(max_favorable, bar_best_pct)
             max_adverse = min(max_adverse, bar_worst_pct)
 
-            # Trailing stop: 1×ATR profit → SL to breakeven, 2×ATR → trail 1 ATR behind
+            # 3-tier trailing stop (matches live trader in analyzer.py)
             current_profit = (high - entry_price)
             if current_profit >= 2 * atr:
                 new_trail = high - atr
                 trailing_sl = max(trailing_sl, new_trail)
             elif current_profit >= atr:
+                target = entry_price + 0.3 * atr
+                trailing_sl = max(trailing_sl, target)
+            elif current_profit >= 0.5 * atr:
                 trailing_sl = max(trailing_sl, entry_price)
 
             if high >= tp_price:
@@ -147,11 +150,15 @@ def _simulate_trade(
             max_favorable = max(max_favorable, bar_best_pct)
             max_adverse = min(max_adverse, bar_worst_pct)
 
+            # 3-tier trailing stop (matches live trader in analyzer.py)
             current_profit = (entry_price - low)
             if current_profit >= 2 * atr:
                 new_trail = low + atr
                 trailing_sl = min(trailing_sl, new_trail)
             elif current_profit >= atr:
+                target = entry_price - 0.3 * atr
+                trailing_sl = min(trailing_sl, target)
+            elif current_profit >= 0.5 * atr:
                 trailing_sl = min(trailing_sl, entry_price)
 
             if low <= tp_price:

@@ -339,8 +339,8 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
     all_indicator_scores = primary["all_scores"]["scores"]
 
     # Volume confirmation: check all volume-related indicators directly
-    vol_indicators = ["obv_trend", "vwap_position", "mfi_signal", "volume_sma_ratio",
-                      "cmf_signal", "adl_trend", "volume_momentum"]
+    # Keys must match score_all_indicators() output in indicators.py
+    vol_indicators = ["OBV", "CMF", "MFI", "Volume Spike", "Klinger", "Force Index", "PVO"]
     vol_scores_direct = [all_indicator_scores.get(k, 0) for k in vol_indicators
                          if all_indicator_scores.get(k, 0) != 0]
     if vol_scores_direct:
@@ -368,7 +368,8 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
         available_max = 25 + 15 + 10 + 10 + 10  # confluence + rr + patterns + volume + news = 70
         if available_max > 0:
             conf_score = round(conf_score / available_max * 100, 1)
-            conf_score = min(conf_score, 100)
+            # Cap at 74.9 so untested strategies can never reach YUKSEK (>=75)
+            conf_score = min(conf_score, 74.9)
 
     # ETA estimation
     eta_low, eta_high = estimate_time_to_target(symbol, bias, entry_price, tp_sl["tp"])
@@ -420,16 +421,19 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
         if last_signal:
             # Same bias — only allow if entry price moved >3% from last signal
             if last_signal.bias == bias:
-                price_change = abs(entry_price - last_signal.entry_price) / last_signal.entry_price
-                if price_change < 0.03:
-                    logger.debug(
-                        f"Dedup: {symbol} {bias} skipped — same bias, price change only {price_change:.1%} "
-                        f"(need >3%)"
+                if not last_signal.entry_price or last_signal.entry_price <= 0:
+                    logger.info(f"Dedup: {symbol} {bias} — last signal has invalid entry_price, allowing new signal")
+                else:
+                    price_change = abs(entry_price - last_signal.entry_price) / last_signal.entry_price
+                    if price_change < 0.03:
+                        logger.debug(
+                            f"Dedup: {symbol} {bias} skipped — same bias, price change only {price_change:.1%} "
+                            f"(need >3%)"
+                        )
+                        return False
+                    logger.info(
+                        f"Dedup: {symbol} {bias} NEW signal — price moved {price_change:.1%} from last"
                     )
-                    return False
-                logger.info(
-                    f"Dedup: {symbol} {bias} NEW signal — price moved {price_change:.1%} from last"
-                )
             else:
                 # Bias flipped (LONG→SHORT or SHORT→LONG) — always allow
                 logger.info(

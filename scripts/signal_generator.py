@@ -15,7 +15,7 @@ from levels import get_all_levels
 
 
 def _init_exchange() -> ccxt.binanceusdm:
-    return ccxt.binanceusdm({"enableRateLimit": True})
+    return ccxt.binanceusdm({"enableRateLimit": True, "timeout": 15000})
 
 
 def fetch_ohlcv(

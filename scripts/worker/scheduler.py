@@ -204,6 +204,28 @@ def start_scheduler():
     if _started:
         return _scheduler
 
+    # Clean up stale RUNNING jobs from previous pod restart
+    try:
+        from db.engine import get_session
+        from db.models import AgentJob
+        session = get_session()
+        try:
+            stale_jobs = session.query(AgentJob).filter(AgentJob.status == "RUNNING").all()
+            if stale_jobs:
+                for job in stale_jobs:
+                    job.status = "FAILED"
+                    job.error_message = "Pod restart - stale job cleaned up"
+                    job.completed_at = datetime.utcnow()
+                session.commit()
+                logger.info(f"Cleaned up {len(stale_jobs)} stale RUNNING jobs from previous restart")
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Stale job cleanup error: {e}")
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Stale job cleanup init error: {e}")
+
     _scheduler = BackgroundScheduler(daemon=True)
 
     now = datetime.utcnow()

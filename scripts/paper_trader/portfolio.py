@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func
 
 from db.engine import get_session
-from db.models import PaperTrade, PortfolioSnapshot, CorrelationCache
+from db.models import PaperTrade, PortfolioSnapshot, CorrelationCache, TradeSnapshot
 from paper_trader.position import calculate_pnl
 
 logger = logging.getLogger("phalidae.portfolio")
@@ -17,9 +17,8 @@ logger = logging.getLogger("phalidae.portfolio")
 INITIAL_CAPITAL = 1000.0
 MAX_RISK_PER_TRADE_PCT = 3.0          # Max 3% of portfolio per trade
 MAX_TOTAL_EXPOSURE_PCT = 50.0          # Max 50% open exposure
-MAX_OPEN_POSITIONS = 10
+MAX_OPEN_POSITIONS = 20                # Matches trader.py MAX_TOTAL_OPEN_TRADES
 MAX_DAILY_LOSS_PCT = 5.0               # Max 5% daily loss
-MAX_CORRELATION = 0.7
 
 
 def get_portfolio_equity() -> float:
@@ -109,6 +108,9 @@ def can_open_trade(symbol: str = None) -> tuple[bool, str]:
     Returns (allowed, reason).
     """
     equity = get_portfolio_equity()
+    if equity <= 0:
+        return False, f"Portfoy sifir veya negatif: ${equity:.2f}"
+
     cash = get_cash_balance()
 
     if cash < 50:
@@ -162,8 +164,20 @@ def record_portfolio_snapshot():
         open_count = len(open_trades)
         total_notional = sum(t.position_size_usd for t in open_trades)
 
-        # Unrealized P&L (from max_profit snapshots)
-        unrealized = sum(t.max_profit * t.position_size_usd / 100 for t in open_trades)
+        # Unrealized P&L from latest TradeSnapshot (actual current P&L, not MFE)
+        unrealized = 0.0
+        for t in open_trades:
+            latest_snap = (
+                session.query(TradeSnapshot)
+                .filter_by(paper_trade_id=t.id)
+                .order_by(TradeSnapshot.timestamp.desc())
+                .first()
+            )
+            if latest_snap:
+                unrealized += latest_snap.unrealized_pnl
+            else:
+                # Fallback if no snapshot yet
+                unrealized += t.max_profit * t.position_size_usd / 100
 
         # Today's realized
         today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
