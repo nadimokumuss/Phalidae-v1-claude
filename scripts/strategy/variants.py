@@ -132,6 +132,17 @@ def generate_seed_variants() -> int:
     return created
 
 
+def _random_weights_perturbation() -> dict | None:
+    """30% chance to generate random indicator weight perturbations."""
+    if random.random() >= 0.3:
+        return None
+    from indicators import INDICATOR_WEIGHTS
+    weights = {}
+    for name, base_w in INDICATOR_WEIGHTS.items():
+        weights[name] = round(max(0.1, min(3.0, base_w * random.uniform(0.5, 2.0))), 2)
+    return weights
+
+
 def generate_random_variants(count: int = 20) -> int:
     """Generate random new variants for exploration."""
     session = get_session()
@@ -167,6 +178,9 @@ def generate_random_variants(count: int = 20) -> int:
                 trend_threshold=round(random.uniform(0.15, 0.5), 2),
                 entry_threshold=round(random.uniform(0.15, 0.5), 2),
                 volume_required=random.choice([True, False]),
+                custom_weights=_random_weights_perturbation(),
+                tp_atr_mult=round(random.uniform(1.5, 4.0), 2),
+                sl_atr_mult=round(random.uniform(1.0, 3.0), 2),
             ))
             created += 1
 
@@ -182,10 +196,52 @@ def generate_random_variants(count: int = 20) -> int:
     return created
 
 
+def _blend_weights(w1: dict | None, w2: dict | None) -> dict | None:
+    """Blend two parent weight dicts with noise. Returns None if both parents are None."""
+    if w1 is None and w2 is None:
+        return None
+    from indicators import INDICATOR_WEIGHTS
+    base = dict(INDICATOR_WEIGHTS)
+    p1 = w1 or base
+    p2 = w2 or base
+
+    child_w = {}
+    all_keys = set(list(p1.keys()) + list(p2.keys()))
+    for key in all_keys:
+        v1 = p1.get(key, base.get(key, 1.0))
+        v2 = p2.get(key, base.get(key, 1.0))
+        blended = random.uniform(min(v1, v2), max(v1, v2)) * random.uniform(0.9, 1.1)
+        child_w[key] = round(max(0.1, min(3.0, blended)), 2)
+
+    # 15% mutation: randomize one weight completely
+    if random.random() < 0.15 and child_w:
+        mutate_key = random.choice(list(child_w.keys()))
+        child_w[mutate_key] = round(random.uniform(0.1, 3.0), 2)
+
+    return child_w
+
+
+def _blend_tp_sl(tp1: float, tp2: float, sl1: float, sl2: float) -> tuple[float, float]:
+    """Blend two parent TP/SL multipliers with noise."""
+    child_tp = random.uniform(min(tp1, tp2), max(tp1, tp2)) * random.uniform(0.95, 1.05)
+    child_sl = random.uniform(min(sl1, sl2), max(sl1, sl2)) * random.uniform(0.95, 1.05)
+
+    # 10% aggressive mutation: completely random value
+    if random.random() < 0.1:
+        child_tp = random.uniform(1.5, 4.0)
+    if random.random() < 0.1:
+        child_sl = random.uniform(1.0, 3.0)
+
+    child_tp = round(max(1.5, min(4.0, child_tp)), 2)
+    child_sl = round(max(1.0, min(3.0, child_sl)), 2)
+    return child_tp, child_sl
+
+
 def generate_genetic_variants(top_n: int = 10, children: int = 15) -> int:
     """
     Crossover top-performing variants to create children.
     Takes components from two parents and mixes them.
+    Also evolves custom_weights, tp_atr_mult, and sl_atr_mult.
     """
     session = get_session()
     created = 0
@@ -211,42 +267,59 @@ def generate_genetic_variants(top_n: int = 10, children: int = 15) -> int:
             logger.info("Not enough high-scoring variants for genetic crossover")
             return 0
 
+        # Load full StrategyVariant objects (not just composition dicts)
         parents = []
         for row in top_ids:
             variant = session.query(StrategyVariant).get(row.strategy_variant_id)
             if variant:
-                parents.append(variant.composition)
+                parents.append(variant)
+
+        if len(parents) < 2:
+            return 0
 
         for _ in range(children * 3):
             if created >= children:
                 break
 
             p1, p2 = random.sample(parents, 2)
+            c1, c2 = p1.composition, p2.composition
 
             # Crossover: take trend from one, entry from other, random volume/volatility
-            child = {
-                "trend": random.choice([p1, p2])["trend"],
-                "entry": random.choice([p1, p2])["entry"],
-                "volume": random.choice([p1, p2])["volume"],
-                "volatility": random.choice([p1, p2])["volatility"],
+            child_comp = {
+                "trend": random.choice([c1, c2])["trend"],
+                "entry": random.choice([c1, c2])["entry"],
+                "volume": random.choice([c1, c2])["volume"],
+                "volatility": random.choice([c1, c2])["volatility"],
             }
 
             # Mutation: 20% chance to swap one component
             if random.random() < 0.2:
                 cat = random.choice(["trend", "entry", "volume"])
                 pool = INDICATOR_CATALOG[cat]
-                n = len(child[cat])
-                child[cat] = random.sample(pool, min(n, len(pool)))
+                n = len(child_comp[cat])
+                child_comp[cat] = random.sample(pool, min(n, len(pool)))
 
-            if _variant_exists(session, child):
+            if _variant_exists(session, child_comp):
                 continue
 
+            # Evolve custom weights from parents
+            child_weights = _blend_weights(p1.custom_weights, p2.custom_weights)
+
+            # Evolve TP/SL multipliers from parents
+            child_tp, child_sl = _blend_tp_sl(
+                p1.tp_atr_mult or 2.5, p2.tp_atr_mult or 2.5,
+                p1.sl_atr_mult or 1.75, p2.sl_atr_mult or 1.75,
+            )
+
             session.add(StrategyVariant(
-                name=_make_name(child),
-                composition=child,
+                name=_make_name(child_comp),
+                composition=child_comp,
                 trend_threshold=round(random.uniform(0.2, 0.45), 2),
                 entry_threshold=round(random.uniform(0.2, 0.45), 2),
                 volume_required=random.choice([True, False]),
+                custom_weights=child_weights,
+                tp_atr_mult=child_tp,
+                sl_atr_mult=child_sl,
             ))
             created += 1
 

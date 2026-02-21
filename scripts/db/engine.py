@@ -90,6 +90,14 @@ def _run_migrations():
         ("signals", "eta_hours_high", "FLOAT"),
         ("signals", "news_risk_score", "FLOAT"),
         ("signals", "invalidation_note", "TEXT"),
+        # Deep learning: custom weights + adaptive TP/SL on strategy_variants
+        ("strategy_variants", "custom_weights", "JSON"),
+        ("strategy_variants", "tp_atr_mult", "FLOAT DEFAULT 2.5"),
+        ("strategy_variants", "sl_atr_mult", "FLOAT DEFAULT 1.75"),
+        # Deep learning: regime-specific best strategies on coin_config
+        ("coin_config", "best_trending_strategy_id", "INTEGER"),
+        ("coin_config", "best_ranging_strategy_id", "INTEGER"),
+        ("coin_config", "best_volatile_strategy_id", "INTEGER"),
     ]
 
     engine = get_engine()

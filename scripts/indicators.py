@@ -802,7 +802,7 @@ def score_all_indicators(df: pd.DataFrame) -> dict:
     }
 
 
-def score_selected_indicators(df: pd.DataFrame, keys: list[str]) -> dict:
+def score_selected_indicators(df: pd.DataFrame, keys: list[str], custom_weights: dict = None) -> dict:
     """
     Score only the selected indicator keys from a strategy variant.
     Returns the same structure as score_all_indicators but only considers
@@ -811,6 +811,7 @@ def score_selected_indicators(df: pd.DataFrame, keys: list[str]) -> dict:
     Args:
         df: DataFrame with all indicators computed
         keys: List of scoring key names (e.g. ["EMA Ribbon", "RSI", "OBV"])
+        custom_weights: Optional per-variant weight overrides (e.g. {"RSI": 1.8})
 
     Returns:
         dict with scores, total_raw, total_normalized, bias, indicator_count
@@ -823,7 +824,7 @@ def score_selected_indicators(df: pd.DataFrame, keys: list[str]) -> dict:
     weighted_sum = 0
     weight_total = 0
     for name, val in selected_scores.items():
-        w = INDICATOR_WEIGHTS.get(name, 1.0)
+        w = (custom_weights or INDICATOR_WEIGHTS).get(name, 1.0)
         weighted_sum += val * w
         weight_total += w
 

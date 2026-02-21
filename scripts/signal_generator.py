@@ -482,21 +482,27 @@ def analyze_symbol_with_strategy(
 # Phase 2: Multi-TP calculation
 # ═══════════════════════════════════════════════════
 
-def calculate_multi_tp(entry: float, atr: float, bias: str) -> dict:
+def calculate_multi_tp(entry: float, atr: float, bias: str, tp_atr_mult: float = 2.5) -> dict:
     """
-    Calculate three TP levels:
-    TP1 = entry +/- 1.2×ATR (partial 50% close — moved closer for earlier profit lock)
-    TP2 = entry +/- 2.5×ATR (30% close)
-    TP3 = entry +/- 4.0×ATR (trailing 20%)
+    Calculate three TP levels scaled from the variant's tp_atr_mult:
+    TP1 = entry +/- 0.48×tp_atr_mult×ATR (partial 50% close)
+    TP2 = entry +/- tp_atr_mult×ATR (30% close)
+    TP3 = entry +/- 1.6×tp_atr_mult×ATR (trailing 20%)
+
+    Default tp_atr_mult=2.5 gives TP1=1.2, TP2=2.5, TP3=4.0 (same as before).
     """
+    tp1_ratio = tp_atr_mult * 0.48
+    tp2_ratio = tp_atr_mult
+    tp3_ratio = tp_atr_mult * 1.6
+
     if bias == "LONG":
-        tp1 = round(entry + 1.2 * atr, 6)
-        tp2 = round(entry + 2.5 * atr, 6)
-        tp3 = round(entry + 4.0 * atr, 6)
+        tp1 = round(entry + tp1_ratio * atr, 6)
+        tp2 = round(entry + tp2_ratio * atr, 6)
+        tp3 = round(entry + tp3_ratio * atr, 6)
     elif bias == "SHORT":
-        tp1 = round(entry - 1.2 * atr, 6)
-        tp2 = round(entry - 2.5 * atr, 6)
-        tp3 = round(entry - 4.0 * atr, 6)
+        tp1 = round(entry - tp1_ratio * atr, 6)
+        tp2 = round(entry - tp2_ratio * atr, 6)
+        tp3 = round(entry - tp3_ratio * atr, 6)
     else:
         return {"tp1": entry, "tp2": entry, "tp3": entry}
 

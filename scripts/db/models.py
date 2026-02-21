@@ -54,6 +54,9 @@ class StrategyVariant(Base):
     trend_threshold = Column(Float, default=0.3)
     entry_threshold = Column(Float, default=0.3)
     volume_required = Column(Boolean, default=True)
+    custom_weights = Column(JSON, nullable=True)  # {"RSI": 1.8, "MACD": 1.2, ...}
+    tp_atr_mult = Column(Float, default=2.5)
+    sl_atr_mult = Column(Float, default=1.75)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     performances = relationship("StrategyPerformance", back_populates="strategy")
@@ -198,6 +201,9 @@ class CoinConfig(Base):
     id = Column(Integer, primary_key=True)
     symbol = Column(String(30), unique=True, nullable=False)
     best_strategy_id = Column(Integer, ForeignKey("strategy_variants.id"), nullable=True)
+    best_trending_strategy_id = Column(Integer, ForeignKey("strategy_variants.id"), nullable=True)
+    best_ranging_strategy_id = Column(Integer, ForeignKey("strategy_variants.id"), nullable=True)
+    best_volatile_strategy_id = Column(Integer, ForeignKey("strategy_variants.id"), nullable=True)
     auto_trade = Column(Boolean, default=True)
 
     # New: per-coin risk settings (Faz 5)

@@ -369,8 +369,9 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
     for cat in ["trend", "entry", "volume", "volatility"]:
         keys.extend(composition.get(cat, []))
 
-    # Get strategy-specific indicator scores for the optimizer
-    strategy_result = score_selected_indicators(df, keys) if keys else None
+    # Get strategy-specific indicator scores for the optimizer (with variant's custom weights)
+    custom_w = best_variant.custom_weights if best_variant else None
+    strategy_result = score_selected_indicators(df, keys, custom_weights=custom_w) if keys else None
 
     # TP/SL from levels
     atr = df["atr"].iloc[-1] if "atr" in df.columns and pd.notna(df["atr"].iloc[-1]) else 0
@@ -401,7 +402,7 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
     # Confidence scoring (Phase 5)
     from signal_generator import calculate_confidence_score, estimate_time_to_target
 
-    # Get backtest win rate for this strategy
+    # Get backtest win rate for this strategy (prefer regime-specific WR)
     backtest_wr = 0.0
     if selected_variant_id:
         session = get_session()
@@ -413,6 +414,14 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
             )
             if perf:
                 backtest_wr = perf.win_rate or 0.0
+                # Regime-specific WR: use if higher than general WR
+                if current_regime in ("TRENDING_UP", "TRENDING_DOWN"):
+                    regime_wr = perf.regime_trending_score or 0.0
+                elif current_regime in ("HIGH_VOLATILITY", "BREAKOUT"):
+                    regime_wr = perf.regime_volatile_score or 0.0
+                else:
+                    regime_wr = perf.regime_ranging_score or 0.0
+                backtest_wr = max(backtest_wr, regime_wr)
         finally:
             session.close()
 
@@ -471,9 +480,10 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
         df, symbol, current_regime, selected_variant_id, entry_price, atr, levels, patterns
     )
 
-    # Multi-TP calculation (Phase 2)
+    # Multi-TP calculation (Phase 2) — scaled by variant's tp_atr_mult
     from signal_generator import calculate_multi_tp
-    multi_tp = calculate_multi_tp(entry_price, atr, bias)
+    variant_tp_mult = best_variant.tp_atr_mult if best_variant and best_variant.tp_atr_mult else 2.5
+    multi_tp = calculate_multi_tp(entry_price, atr, bias, tp_atr_mult=variant_tp_mult)
 
     # --- Smart Dedup: position-aware signal deduplication ---
     session = get_session()
@@ -699,26 +709,22 @@ def _generate_decision_trace(
 
 
 def _get_regime_best_strategy(session, symbol: str, regime: str) -> StrategyVariant | None:
-    """Get the best strategy for a specific regime, if available."""
-    # Map regime to score column
-    if regime in ("TRENDING_UP", "TRENDING_DOWN"):
-        score_col = StrategyPerformance.regime_trending_score
-    elif regime in ("HIGH_VOLATILITY", "BREAKOUT"):
-        score_col = StrategyPerformance.regime_volatile_score
-    else:
-        score_col = StrategyPerformance.regime_ranging_score
+    """Get the best strategy for a specific regime via CoinConfig lookup (no query needed)."""
+    config = session.query(CoinConfig).filter_by(symbol=symbol).first()
+    if not config:
+        return None
 
-    result = (
-        session.query(StrategyVariant)
-        .join(StrategyPerformance, StrategyVariant.id == StrategyPerformance.strategy_variant_id)
-        .filter(
-            StrategyPerformance.symbol == symbol,
-            score_col > 0,
-        )
-        .order_by(score_col.desc())
-        .first()
-    )
-    return result
+    if regime in ("TRENDING_UP", "TRENDING_DOWN"):
+        sid = getattr(config, 'best_trending_strategy_id', None)
+    elif regime in ("HIGH_VOLATILITY", "BREAKOUT"):
+        sid = getattr(config, 'best_volatile_strategy_id', None)
+    else:
+        sid = getattr(config, 'best_ranging_strategy_id', None)
+
+    if not sid:
+        return None
+
+    return session.query(StrategyVariant).get(sid)
 
 
 def _evaluate_alternatives(

@@ -42,6 +42,7 @@ def _check_signal(
     entry_threshold: float,
     volume_required: bool,
     composition: dict,
+    custom_weights: dict = None,
 ) -> str | None:
     """
     Check if a strategy variant triggers a signal at bar_idx.
@@ -52,7 +53,7 @@ def _check_signal(
 
     # Score only selected indicators using last 2 bars context
     sub_df = df.iloc[:bar_idx + 1]
-    result = score_selected_indicators(sub_df, keys)
+    result = score_selected_indicators(sub_df, keys, custom_weights=custom_weights)
 
     all_scores = result["scores"]
 
@@ -83,6 +84,8 @@ def _simulate_trade(
     entry_idx: int,
     bias: str,
     atr: float,
+    tp_atr_mult: float = TP_ATR_MULT,
+    sl_atr_mult: float = SL_ATR_MULT,
 ) -> dict | None:
     """
     Simulate a trade from entry_idx forward.
@@ -97,11 +100,11 @@ def _simulate_trade(
         return None
 
     if bias == "LONG":
-        tp_price = entry_price + TP_ATR_MULT * atr
-        sl_price = entry_price - SL_ATR_MULT * atr
+        tp_price = entry_price + tp_atr_mult * atr
+        sl_price = entry_price - sl_atr_mult * atr
     else:
-        tp_price = entry_price - TP_ATR_MULT * atr
-        sl_price = entry_price + SL_ATR_MULT * atr
+        tp_price = entry_price - tp_atr_mult * atr
+        sl_price = entry_price + sl_atr_mult * atr
 
     # Round-trip fee+slippage cost as percentage of position (leveraged)
     fee_cost_pct = (FEE_RATE * 2 + SLIPPAGE_RATE * 2) * DEFAULT_LEVERAGE * 100
@@ -186,6 +189,9 @@ def backtest_variant(
     trend_threshold: float = 0.3,
     entry_threshold: float = 0.3,
     volume_required: bool = True,
+    custom_weights: dict = None,
+    tp_atr_mult: float = 2.5,
+    sl_atr_mult: float = 1.75,
 ) -> dict:
     """
     Walk-forward backtest of a strategy variant on pre-computed DataFrame.
@@ -196,6 +202,9 @@ def backtest_variant(
         trend_threshold: Minimum average trend score for signal
         entry_threshold: Minimum average entry score for signal
         volume_required: Whether volume confirmation is needed
+        custom_weights: Optional per-variant indicator weight overrides
+        tp_atr_mult: TP distance in ATR multiples (default 2.5)
+        sl_atr_mult: SL distance in ATR multiples (default 1.75)
 
     Returns:
         dict with total_trades, winning_trades, losing_trades, win_rate,
@@ -225,7 +234,8 @@ def backtest_variant(
             continue
 
         signal = _check_signal(
-            df, i, keys, trend_threshold, entry_threshold, volume_required, composition
+            df, i, keys, trend_threshold, entry_threshold, volume_required, composition,
+            custom_weights=custom_weights,
         )
         if signal is None:
             continue
@@ -234,7 +244,7 @@ def backtest_variant(
         if atr <= 0:
             continue
 
-        result = _simulate_trade(df, i, signal, atr)
+        result = _simulate_trade(df, i, signal, atr, tp_atr_mult=tp_atr_mult, sl_atr_mult=sl_atr_mult)
         if result:
             # Tag trade with regime at entry
             result["regime"] = regime_series.iloc[i]

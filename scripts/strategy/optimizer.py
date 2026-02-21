@@ -91,6 +91,9 @@ def _optimize_symbol(symbol: str, variants: list[StrategyVariant], max_bars: int
                 trend_threshold=variant.trend_threshold,
                 entry_threshold=variant.entry_threshold,
                 volume_required=variant.volume_required,
+                custom_weights=variant.custom_weights,
+                tp_atr_mult=variant.tp_atr_mult or 2.5,
+                sl_atr_mult=variant.sl_atr_mult or 1.75,
             )
 
             if metrics["total_trades"] == 0:
@@ -156,7 +159,9 @@ def _update_ranks(session, symbol: str):
 
 
 def _update_best_strategies():
-    """Update coin_config with the best strategy for each symbol."""
+    """Update coin_config with the best strategy for each symbol (general + regime-specific)."""
+    MIN_REGIME_SCORE = 0.4  # Minimum 40% win rate in a regime to qualify
+
     session = get_session()
     try:
         symbols = session.query(TrackedSymbol).filter_by(is_active=True).all()
@@ -176,10 +181,45 @@ def _update_best_strategies():
                 session.add(config)
 
             config.best_strategy_id = best.strategy_variant_id
+
+            # Regime-specific best strategies
+            best_trending = (
+                session.query(StrategyPerformance)
+                .filter_by(symbol=ts.symbol)
+                .filter(StrategyPerformance.regime_trending_score >= MIN_REGIME_SCORE)
+                .order_by(StrategyPerformance.regime_trending_score.desc())
+                .first()
+            )
+            config.best_trending_strategy_id = (
+                best_trending.strategy_variant_id if best_trending else None
+            )
+
+            best_ranging = (
+                session.query(StrategyPerformance)
+                .filter_by(symbol=ts.symbol)
+                .filter(StrategyPerformance.regime_ranging_score >= MIN_REGIME_SCORE)
+                .order_by(StrategyPerformance.regime_ranging_score.desc())
+                .first()
+            )
+            config.best_ranging_strategy_id = (
+                best_ranging.strategy_variant_id if best_ranging else None
+            )
+
+            best_volatile = (
+                session.query(StrategyPerformance)
+                .filter_by(symbol=ts.symbol)
+                .filter(StrategyPerformance.regime_volatile_score >= MIN_REGIME_SCORE)
+                .order_by(StrategyPerformance.regime_volatile_score.desc())
+                .first()
+            )
+            config.best_volatile_strategy_id = (
+                best_volatile.strategy_variant_id if best_volatile else None
+            )
+
             config.updated_at = datetime.utcnow()
 
         session.commit()
-        logger.info("Updated best strategies for all coins")
+        logger.info("Updated best strategies for all coins (general + regime-specific)")
     except Exception as e:
         session.rollback()
         logger.error(f"Best strategy update error: {e}")
