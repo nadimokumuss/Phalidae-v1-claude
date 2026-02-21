@@ -63,15 +63,18 @@ def render():
             if t["symbol"] == selected_symbol
         ][:20]
 
+        # Son fiyat (unrealized P&L icin)
+        current_price = ohlcv[-1]["close"] if ohlcv else 0
+
         # Overlay verileri
-        price_lines = _build_price_lines(open_trades)
+        price_lines = _build_price_lines(open_trades, current_price)
         markers = _build_markers(open_trades, closed_trades, ohlcv)
 
         html = _build_chart_html(ohlcv, price_lines, markers, coin_name, selected_tf)
         components.html(html, height=560, scrolling=False)
 
         # Trade info paneli
-        _render_trade_info(open_trades, closed_trades)
+        _render_trade_info(open_trades, closed_trades, current_price)
 
     _chart_fragment()
 
@@ -80,19 +83,33 @@ def render():
 # Price lines (acik tradelerin entry/TP/SL cizgileri)
 # ---------------------------------------------------------------------------
 
-def _build_price_lines(open_trades: list[dict]) -> list[dict]:
+def _build_price_lines(open_trades: list[dict], current_price: float) -> list[dict]:
     """Acik tradelerin yatay cizgileri — Lightweight Charts priceLine API."""
     lines = []
     for t in open_trades:
         bias = t["bias"]
+        entry = t["entry_price"]
+        leverage = t.get("leverage", 5.0)
+
+        # Unrealized P&L hesapla
+        if current_price and entry:
+            if bias == "LONG":
+                pnl_pct = ((current_price - entry) / entry) * 100 * leverage
+            else:
+                pnl_pct = ((entry - current_price) / entry) * 100 * leverage
+            pnl_str = f" | {pnl_pct:+.2f}%"
+            entry_color = "#26a69a" if pnl_pct >= 0 else "#ef5350"
+        else:
+            pnl_str = ""
+            entry_color = "#FFD700"
 
         # Entry
         lines.append({
-            "price": t["entry_price"],
-            "color": "#FFD700",
+            "price": entry,
+            "color": entry_color,
             "lineWidth": 2,
             "lineStyle": 0,  # solid
-            "title": f"Entry ({bias})",
+            "title": f"Entry ({bias}){pnl_str}",
         })
 
         # TP levels
@@ -147,12 +164,15 @@ def _build_markers(
 ) -> list[dict]:
     """Trade giris/cikis noktalarini marker olarak doner."""
     markers = []
+    if not ohlcv or len(ohlcv) < 2:
+        return markers
+
+    # Grafik zaman araligi
+    chart_start = ohlcv[0]["time"]
+    chart_end = ohlcv[-1]["time"]
 
     def _find_nearest_time(ts_iso: str | None, ts_short: str | None) -> int | None:
-        """Trade zamanina en yakin mum zamanini bul."""
-        if not ohlcv:
-            return None
-
+        """Trade zamanina en yakin mum zamanini bul. Grafik disindaysa None."""
         target_ts = None
         if ts_iso:
             try:
@@ -163,7 +183,6 @@ def _build_markers(
 
         if target_ts is None and ts_short:
             try:
-                # Format: "MM-DD HH:MM" — bu yilin tarihini varsay
                 now = datetime.utcnow()
                 dt = datetime.strptime(ts_short, "%m-%d %H:%M").replace(year=now.year)
                 target_ts = int(dt.timestamp())
@@ -171,6 +190,10 @@ def _build_markers(
                 return None
 
         if target_ts is None:
+            return None
+
+        # Grafik araliginin disindaysa marker koyma
+        if target_ts < chart_start or target_ts > chart_end:
             return None
 
         # En yakin mumu bul
@@ -389,7 +412,7 @@ def _build_chart_html(
 # Trade info paneli (grafik altinda)
 # ---------------------------------------------------------------------------
 
-def _render_trade_info(open_trades: list[dict], closed_trades: list[dict]):
+def _render_trade_info(open_trades: list[dict], closed_trades: list[dict], current_price: float = 0):
     """Grafik altinda acik/kapali trade detaylari."""
     if not open_trades and not closed_trades:
         return
@@ -399,24 +422,40 @@ def _render_trade_info(open_trades: list[dict], closed_trades: list[dict]):
         st.subheader(f"Acik Islemler ({len(open_trades)})")
         for t in open_trades:
             bias_icon = "LONG" if t["bias"] == "LONG" else "SHORT"
+            entry = t["entry_price"]
+            leverage = t.get("leverage", 5.0)
+            size_usd = t.get("position_size_usd") or 200
+
+            # Unrealized P&L
+            if current_price and entry:
+                if t["bias"] == "LONG":
+                    pnl_pct = ((current_price - entry) / entry) * 100 * leverage
+                else:
+                    pnl_pct = ((entry - current_price) / entry) * 100 * leverage
+                pnl_usd = size_usd * (pnl_pct / 100)
+            else:
+                pnl_pct = 0
+                pnl_usd = 0
+
             tp_status = ""
             if t.get("partial_tp_taken"):
                 tp_status = " | TP1 alindi"
 
-            cols = st.columns([1, 1, 1, 1, 1])
+            cols = st.columns([1, 1, 1, 1, 1, 1])
             cols[0].metric("Yon", bias_icon)
-            cols[1].metric("Entry", f"${t['entry_price']:,.4f}" if t["entry_price"] < 1 else f"${t['entry_price']:,.2f}")
+            cols[1].metric("Entry", f"${entry:,.4f}" if entry < 1 else f"${entry:,.2f}")
+            cols[2].metric("Anlik P&L", f"{pnl_pct:+.2f}%", delta=f"${pnl_usd:+.2f}")
             tp_val = t.get("tp_price") or t.get("tp2_price")
-            cols[2].metric("TP", f"${tp_val:,.4f}" if tp_val and tp_val < 1 else (f"${tp_val:,.2f}" if tp_val else "-"))
-            cols[3].metric("SL", f"${t['sl_price']:,.4f}" if t["sl_price"] and t["sl_price"] < 1 else (f"${t['sl_price']:,.2f}" if t["sl_price"] else "-"))
+            cols[3].metric("TP", f"${tp_val:,.4f}" if tp_val and tp_val < 1 else (f"${tp_val:,.2f}" if tp_val else "-"))
+            cols[4].metric("SL", f"${t['sl_price']:,.4f}" if t["sl_price"] and t["sl_price"] < 1 else (f"${t['sl_price']:,.2f}" if t["sl_price"] else "-"))
             trail = t.get("trailing_stop_price")
-            cols[4].metric("Trail SL", f"${trail:,.4f}" if trail and trail < 1 else (f"${trail:,.2f}" if trail else "-"))
+            cols[5].metric("Trail SL", f"${trail:,.4f}" if trail and trail < 1 else (f"${trail:,.2f}" if trail else "-"))
 
             detail_cols = st.columns([1, 1, 1, 1, 1])
-            detail_cols[0].caption(f"MFE: {t['mfe_pct']:.2f}%")
-            detail_cols[1].caption(f"MAE: {t['mae_pct']:.2f}%")
-            detail_cols[2].caption(f"Rejim: {t.get('regime_at_entry', '-')}")
-            detail_cols[3].caption(f"Giris: {t.get('opened_at', '-')}")
+            detail_cols[0].caption(f"MFE: {t['mfe_pct']:.2f}% | MAE: {t['mae_pct']:.2f}%")
+            detail_cols[1].caption(f"Rejim: {t.get('regime_at_entry', '-')}")
+            detail_cols[2].caption(f"Giris: {t.get('opened_at', '-')}")
+            detail_cols[3].caption(f"Kaldırac: {leverage:.0f}x | Pozisyon: ${size_usd:,.0f}")
             detail_cols[4].caption(f"Multi-TP{tp_status}")
             st.divider()
 
