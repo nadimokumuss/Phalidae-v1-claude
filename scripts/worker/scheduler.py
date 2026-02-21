@@ -159,7 +159,9 @@ def _bootstrap():
 
         if count == 0:
             logger.info("Bootstrap: no symbols found, running refresh_tracked_symbols...")
-            _job_refresh_symbols()
+        else:
+            logger.info(f"Bootstrap: {count} symbols found, refreshing with latest filters...")
+        _job_refresh_symbols()
 
         # Step 2: Run first collection immediately
         logger.info("Bootstrap: running initial collector...")
