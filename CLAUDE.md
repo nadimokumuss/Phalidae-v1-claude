@@ -154,7 +154,7 @@ These files are protected by a pre-commit hook (see [Hooks](#hooks) section). An
 | Constant | Value | Location |
 |----------|-------|----------|
 | Default leverage | 5x | backtester.py, trader.py |
-| Position size | 1000 USD | backtester.py, trader.py |
+| Position size | 200 USD | backtester.py, trader.py |
 | TP ATR multiplier | 2.5x | backtester.py |
 | SL ATR multiplier | 1.75x | backtester.py |
 | TP1 ATR multiplier | 1.2x | signal_generator.py |
@@ -164,13 +164,17 @@ These files are protected by a pre-commit hook (see [Hooks](#hooks) section). An
 | TF weights | 5m=0.05, 15m=0.10, 30m=0.15, 1h=0.25, 4h=0.35 | analyzer.py, signal_generator.py |
 | Bias threshold | +/-2.0 total score | analyzer.py |
 | Max open trades/symbol | 1 | trader.py |
-| Max total open trades | 20 | trader.py |
+| Max total open trades | 55 | trader.py, portfolio.py |
 | Max correlation | 0.95 | trader.py |
 | Daily drawdown limit | 10% (per coin, configurable) | trader.py |
+| Initial capital | 100,000 USD (learning mode) | portfolio.py |
+| Max risk per trade | 1% | portfolio.py |
+| Max total exposure | 90% | portfolio.py |
+| Max daily loss | 15% | portfolio.py |
 | Confidence: YUKSEK | >= 75/100 | analyzer.py |
 | Confidence: ORTA | >= 50/100 | analyzer.py |
 | Confidence: DUSUK | < 50/100 | analyzer.py |
-| Auto-trade gate | YUKSEK or ORTA | analyzer.py |
+| Auto-trade gate | YUKSEK, ORTA, or DUSUK (50% size) | analyzer.py |
 | Dedup price threshold | 3% price change | analyzer.py |
 | News risk skip | > 0.9 | analyzer.py |
 | News risk halve | > 0.7 | analyzer.py |

@@ -581,13 +581,17 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
     finally:
         session.close()
 
-    # Auto paper trade if configured
-    if config.auto_trade and confidence in ("YUKSEK", "ORTA"):
+    # Auto paper trade if configured (learning mode: DUSUK also trades)
+    if config.auto_trade and confidence in ("YUKSEK", "ORTA", "DUSUK"):
         # Reduce position size if news risk is high
         position_size_override = None
         if news_risk > 0.7:
-            position_size_override = (config.max_position_size or 1000.0) * 0.5
+            position_size_override = (config.max_position_size or 200.0) * 0.5
             logger.info(f"News risk {news_risk:.2f}: halving position size for {symbol}")
+
+        # DUSUK confidence: 50% smaller position for learning with less risk
+        if confidence == "DUSUK" and position_size_override is None:
+            position_size_override = (config.max_position_size or 200.0) * 0.5
 
         open_paper_trade(
             signal_id=signal_id,

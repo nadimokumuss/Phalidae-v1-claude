@@ -18,7 +18,7 @@ logger = logging.getLogger("phalidae.backtester")
 
 # Default backtest parameters
 DEFAULT_LEVERAGE = 5.0
-DEFAULT_POSITION_SIZE = 1000.0  # USD
+DEFAULT_POSITION_SIZE = 200.0   # USD (learning mode: smaller positions)
 WARMUP_BARS = 200
 TP_ATR_MULT = 2.5
 SL_ATR_MULT = 1.75

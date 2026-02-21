@@ -14,11 +14,11 @@ from paper_trader.position import calculate_pnl
 
 logger = logging.getLogger("phalidae.portfolio")
 
-INITIAL_CAPITAL = 1000.0
-MAX_RISK_PER_TRADE_PCT = 3.0          # Max 3% of portfolio per trade
-MAX_TOTAL_EXPOSURE_PCT = 50.0          # Max 50% open exposure
-MAX_OPEN_POSITIONS = 20                # Matches trader.py MAX_TOTAL_OPEN_TRADES
-MAX_DAILY_LOSS_PCT = 5.0               # Max 5% daily loss
+INITIAL_CAPITAL = 100_000.0
+MAX_RISK_PER_TRADE_PCT = 1.0          # Small positions, many trades (learning mode)
+MAX_TOTAL_EXPOSURE_PCT = 90.0          # 55 coins x $200 = $11K, plenty of room
+MAX_OPEN_POSITIONS = 55                # 55 active coins = theoretical max
+MAX_DAILY_LOSS_PCT = 15.0              # Learning mode: higher tolerance
 
 
 def get_portfolio_equity() -> float:
@@ -74,7 +74,7 @@ def calculate_position_size(
     Clamped between $50 and max per-position limit.
     """
     equity = get_portfolio_equity()
-    if equity < 50:
+    if equity < 100:
         return 0.0
 
     risk_amount = equity * (MAX_RISK_PER_TRADE_PCT / 100)
@@ -93,7 +93,7 @@ def calculate_position_size(
         session.close()
 
     max_per_position = (equity * MAX_TOTAL_EXPOSURE_PCT / 100) / max(open_count + 1, 1)
-    position_size = max(50.0, min(position_size, max_per_position, equity * 0.5))
+    position_size = max(100.0, min(position_size, max_per_position, equity * 0.5))
 
     return round(position_size, 2)
 
@@ -113,7 +113,7 @@ def can_open_trade(symbol: str = None) -> tuple[bool, str]:
 
     cash = get_cash_balance()
 
-    if cash < 50:
+    if cash < 100:
         return False, f"Yetersiz nakit: ${cash:.2f}"
 
     session = get_session()
