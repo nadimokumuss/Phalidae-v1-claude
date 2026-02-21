@@ -12,7 +12,7 @@ from signal_generator import (
 )
 from charting import plot_interactive_chart
 from commentary import generate_page_header
-from views.cache import get_recent_signals_cached
+from views.cache import get_recent_signals_cached, get_signal_counts_cached
 
 
 def render():
@@ -31,15 +31,27 @@ def render():
         _render_live_scan()
 
 
+@st.fragment(run_every=60)
+def _fragment_signal_summary():
+    """Sinyal sayilari — 60s auto-refresh."""
+    counts = get_signal_counts_cached()
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Toplam Sinyal", f"{counts['total']:,}")
+    c2.metric("Bugun", counts['today'], help=f"{counts['today_long']} LONG, {counts['today_short']} SHORT")
+    c3.metric("Bugun LONG", counts['today_long'])
+    c4.metric("Son Sinyal", counts['latest_at'] + " UTC")
+
+
 def _render_db_signals():
     """Show recent signals from database — cached (TTL=60s)."""
+    # Sinyal sayilari ozeti (auto-refresh)
+    _fragment_signal_summary()
+
     signals = get_recent_signals_cached(limit=100)
 
     if not signals:
         st.info("Henuz otomatik sinyal uretilmedi. Analyzer ilk calistiginda burada gorunecek.")
         return
-
-    st.success(f"Son {len(signals)} sinyal")
 
     # Filters
     col1, col2, col3, col4 = st.columns(4)

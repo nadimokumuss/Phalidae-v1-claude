@@ -222,6 +222,35 @@ def get_recent_signals_cached(limit: int = 100) -> list[dict]:
         return []
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def get_signal_counts_cached() -> dict:
+    """Bugunun ve toplam sinyal sayilari."""
+    session = get_session()
+    try:
+        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        total = session.query(func.count(Signal.id)).scalar() or 0
+        today = session.query(func.count(Signal.id)).filter(
+            Signal.created_at >= today_start
+        ).scalar() or 0
+        today_long = session.query(func.count(Signal.id)).filter(
+            Signal.created_at >= today_start, Signal.bias == "LONG"
+        ).scalar() or 0
+
+        # En son sinyal zamani
+        latest = session.query(func.max(Signal.created_at)).scalar()
+        latest_str = latest.strftime("%H:%M") if latest else "-"
+
+        return {
+            "total": int(total),
+            "today": int(today),
+            "today_long": int(today_long),
+            "today_short": int(today) - int(today_long),
+            "latest_at": latest_str,
+        }
+    finally:
+        session.close()
+
+
 # ---------------------------------------------------------------------------
 # Market Data (TTL=120s)
 # ---------------------------------------------------------------------------
