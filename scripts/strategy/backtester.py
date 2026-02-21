@@ -21,7 +21,7 @@ DEFAULT_LEVERAGE = 5.0
 DEFAULT_POSITION_SIZE = 1000.0  # USD
 WARMUP_BARS = 200
 TP_ATR_MULT = 2.5
-SL_ATR_MULT = 1.5
+SL_ATR_MULT = 1.75
 FEE_RATE = 0.0004       # Taker fee per side (%0.04)
 SLIPPAGE_RATE = 0.0002  # Estimated slippage per side (%0.02)
 

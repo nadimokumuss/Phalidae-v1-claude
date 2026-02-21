@@ -27,6 +27,59 @@ from regime import classify_regime, get_regime_details, MarketRegime
 
 logger = logging.getLogger("phalidae.analyzer")
 
+# Coins with consistently negative paper trading performance.
+# These are temporarily excluded from signal generation.
+# Review periodically and re-enable when market conditions change.
+COIN_BLACKLIST = {
+    "WLFI/USDT:USDT",   # -$54 cumulative loss, 0% win rate on LONG
+    "SPACE/USDT:USDT",   # -$32 single SL_HIT in TRENDING_UP
+}
+
+# Auto-blacklist threshold: skip coins with >= this many consecutive losses
+AUTO_BLACKLIST_CONSECUTIVE_LOSSES = 3
+# Auto-blacklist: minimum paper trade count to evaluate
+AUTO_BLACKLIST_MIN_TRADES = 3
+
+
+def _is_coin_blacklisted(symbol: str) -> bool:
+    """Check if a coin is on the static blacklist or has poor recent performance."""
+    if symbol in COIN_BLACKLIST:
+        return True
+
+    # Dynamic check: skip coins with N consecutive recent losses
+    try:
+        session = get_session()
+        try:
+            recent_trades = (
+                session.query(PaperTrade)
+                .filter(
+                    PaperTrade.symbol == symbol,
+                    PaperTrade.status != "OPEN",
+                )
+                .order_by(PaperTrade.closed_at.desc())
+                .limit(AUTO_BLACKLIST_MIN_TRADES)
+                .all()
+            )
+            if len(recent_trades) >= AUTO_BLACKLIST_MIN_TRADES:
+                consecutive_losses = 0
+                for t in recent_trades:
+                    total_pnl = (t.pnl_usd or 0) + (t.partial_tp_pnl or 0)
+                    if total_pnl < 0:
+                        consecutive_losses += 1
+                    else:
+                        break
+                if consecutive_losses >= AUTO_BLACKLIST_CONSECUTIVE_LOSSES:
+                    logger.info(
+                        f"Auto-blacklist: {symbol} has {consecutive_losses} consecutive losses, skipping"
+                    )
+                    return True
+        finally:
+            session.close()
+    except Exception:
+        pass
+
+    return False
+
 
 def _to_float(val) -> float:
     """Convert numpy/pandas numeric types to native Python float for PostgreSQL."""
@@ -187,6 +240,11 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
     """Analyze a single symbol with multi-TF, all indicators, and full scoring. Returns True if signal created."""
     symbol = config.symbol
 
+    # --- Coin blacklist check ---
+    if _is_coin_blacklisted(symbol):
+        logger.debug(f"Blacklist: {symbol} skipped")
+        return False
+
     # --- Multi-timeframe data loading ---
     tf_weights = {"5m": 0.05, "15m": 0.10, "30m": 0.15, "1h": 0.25, "4h": 0.35}
     tf_results = {}
@@ -268,6 +326,29 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
     # Detect current regime
     regime_details = get_regime_details(df)
     current_regime = regime_details["regime"]
+
+    # --- TRENDING_UP LONG filter: overbought + pullback requirement ---
+    # Analysis showed LONG entries at trend tops get SL'd on pullbacks.
+    # Two checks: (1) CCI overbought blocks entry, (2) RSI must be <=65 (pullback zone).
+    if bias == "LONG" and current_regime == "TRENDING_UP":
+        last_row = df.iloc[-1]
+        rsi_val = float(last_row["rsi"]) if "rsi" in df.columns and pd.notna(last_row.get("rsi")) else None
+        cci_val = float(last_row["cci"]) if "cci" in df.columns and pd.notna(last_row.get("cci")) else None
+
+        # Hard block: CCI extreme overbought
+        if cci_val is not None and cci_val > 200:
+            logger.info(
+                f"Overbought filter: {symbol} LONG skipped in TRENDING_UP (CCI={cci_val:.1f} > 200)"
+            )
+            return False
+
+        # Pullback requirement: RSI must be in pullback zone (<=65)
+        if rsi_val is not None and rsi_val > 65:
+            logger.info(
+                f"Pullback filter: {symbol} LONG skipped in TRENDING_UP — no pullback "
+                f"(RSI={rsi_val:.1f}, need <=65)"
+            )
+            return False
 
     # Try regime-specific strategy first, fallback to general best
     best_variant = variant

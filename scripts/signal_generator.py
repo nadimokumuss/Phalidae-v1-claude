@@ -69,8 +69,8 @@ def calculate_optimal_tp_sl(
 
     if bias == "LONG":
         # ── SL Adayları ──
-        # ATR bazlı
-        sl_candidates.append({"price": entry - 1.5 * atr, "weight": 2, "method": "ATR 1.5x"})
+        # ATR bazlı (1.75x = wider SL to reduce SL_HIT rate)
+        sl_candidates.append({"price": entry - 1.75 * atr, "weight": 2, "method": "ATR 1.75x"})
         sl_candidates.append({"price": entry - 2.0 * atr, "weight": 1.5, "method": "ATR 2.0x"})
 
         # Destek seviyeleri (ağırlıklı)
@@ -101,7 +101,7 @@ def calculate_optimal_tp_sl(
 
     elif bias == "SHORT":
         # ── SL Adayları ──
-        sl_candidates.append({"price": entry + 1.5 * atr, "weight": 2, "method": "ATR 1.5x"})
+        sl_candidates.append({"price": entry + 1.75 * atr, "weight": 2, "method": "ATR 1.75x"})
         sl_candidates.append({"price": entry + 2.0 * atr, "weight": 1.5, "method": "ATR 2.0x"})
 
         for r in resistances[:10]:
@@ -485,16 +485,16 @@ def analyze_symbol_with_strategy(
 def calculate_multi_tp(entry: float, atr: float, bias: str) -> dict:
     """
     Calculate three TP levels:
-    TP1 = entry +/- 1.5×ATR (partial 50% close)
+    TP1 = entry +/- 1.2×ATR (partial 50% close — moved closer for earlier profit lock)
     TP2 = entry +/- 2.5×ATR (30% close)
     TP3 = entry +/- 4.0×ATR (trailing 20%)
     """
     if bias == "LONG":
-        tp1 = round(entry + 1.5 * atr, 6)
+        tp1 = round(entry + 1.2 * atr, 6)
         tp2 = round(entry + 2.5 * atr, 6)
         tp3 = round(entry + 4.0 * atr, 6)
     elif bias == "SHORT":
-        tp1 = round(entry - 1.5 * atr, 6)
+        tp1 = round(entry - 1.2 * atr, 6)
         tp2 = round(entry - 2.5 * atr, 6)
         tp3 = round(entry - 4.0 * atr, 6)
     else:
