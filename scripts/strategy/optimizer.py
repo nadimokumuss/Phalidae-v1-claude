@@ -93,7 +93,7 @@ def _optimize_symbol(symbol: str, variants: list[StrategyVariant], max_bars: int
                 volume_required=variant.volume_required,
                 custom_weights=variant.custom_weights,
                 tp_atr_mult=variant.tp_atr_mult or 2.5,
-                sl_atr_mult=variant.sl_atr_mult or 1.75,
+                sl_atr_mult=variant.sl_atr_mult or 1.5,
             )
 
             if metrics["total_trades"] == 0:

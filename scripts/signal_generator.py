@@ -47,6 +47,8 @@ def calculate_optimal_tp_sl(
     bias: str,
     all_levels: dict,
     fib_data: dict,
+    tp_atr_mult: float = 2.5,
+    sl_atr_mult: float = 1.5,
 ) -> dict:
     """
     Çoklu yöntem kullanarak en optimal TP ve SL hesaplar:
@@ -69,9 +71,9 @@ def calculate_optimal_tp_sl(
 
     if bias == "LONG":
         # ── SL Adayları ──
-        # ATR bazlı (1.75x = wider SL to reduce SL_HIT rate)
-        sl_candidates.append({"price": entry - 1.75 * atr, "weight": 2, "method": "ATR 1.75x"})
-        sl_candidates.append({"price": entry - 2.0 * atr, "weight": 1.5, "method": "ATR 2.0x"})
+        # ATR bazlı SL (variant'ın sl_atr_mult'ı)
+        sl_candidates.append({"price": entry - sl_atr_mult * atr, "weight": 2, "method": f"ATR {sl_atr_mult}x"})
+        sl_candidates.append({"price": entry - sl_atr_mult * 1.15 * atr, "weight": 1.5, "method": f"ATR {round(sl_atr_mult * 1.15, 2)}x"})
 
         # Destek seviyeleri (ağırlıklı)
         for s in supports[:10]:
@@ -79,10 +81,10 @@ def calculate_optimal_tp_sl(
                 sl_candidates.append({"price": s["price"], "weight": s["weight"], "method": s["method"]})
 
         # ── TP Adayları ──
-        # ATR bazlı
-        tp_candidates.append({"price": entry + 2.0 * atr, "weight": 1.5, "method": "ATR 2.0x"})
-        tp_candidates.append({"price": entry + 3.0 * atr, "weight": 2, "method": "ATR 3.0x"})
-        tp_candidates.append({"price": entry + 4.0 * atr, "weight": 1, "method": "ATR 4.0x"})
+        # ATR bazlı TP (variant'ın tp_atr_mult'ı)
+        tp_candidates.append({"price": entry + tp_atr_mult * 0.8 * atr, "weight": 1.5, "method": f"ATR {round(tp_atr_mult * 0.8, 1)}x"})
+        tp_candidates.append({"price": entry + tp_atr_mult * atr, "weight": 2, "method": f"ATR {tp_atr_mult}x"})
+        tp_candidates.append({"price": entry + tp_atr_mult * 1.6 * atr, "weight": 1, "method": f"ATR {round(tp_atr_mult * 1.6, 1)}x"})
 
         # Direnç seviyeleri
         for r in resistances[:10]:
@@ -101,17 +103,17 @@ def calculate_optimal_tp_sl(
 
     elif bias == "SHORT":
         # ── SL Adayları ──
-        sl_candidates.append({"price": entry + 1.75 * atr, "weight": 2, "method": "ATR 1.75x"})
-        sl_candidates.append({"price": entry + 2.0 * atr, "weight": 1.5, "method": "ATR 2.0x"})
+        sl_candidates.append({"price": entry + sl_atr_mult * atr, "weight": 2, "method": f"ATR {sl_atr_mult}x"})
+        sl_candidates.append({"price": entry + sl_atr_mult * 1.15 * atr, "weight": 1.5, "method": f"ATR {round(sl_atr_mult * 1.15, 2)}x"})
 
         for r in resistances[:10]:
             if r["price"] > entry and r["price"] < entry * 1.1:
                 sl_candidates.append({"price": r["price"], "weight": r["weight"], "method": r["method"]})
 
         # ── TP Adayları ──
-        tp_candidates.append({"price": entry - 2.0 * atr, "weight": 1.5, "method": "ATR 2.0x"})
-        tp_candidates.append({"price": entry - 3.0 * atr, "weight": 2, "method": "ATR 3.0x"})
-        tp_candidates.append({"price": entry - 4.0 * atr, "weight": 1, "method": "ATR 4.0x"})
+        tp_candidates.append({"price": entry - tp_atr_mult * 0.8 * atr, "weight": 1.5, "method": f"ATR {round(tp_atr_mult * 0.8, 1)}x"})
+        tp_candidates.append({"price": entry - tp_atr_mult * atr, "weight": 2, "method": f"ATR {tp_atr_mult}x"})
+        tp_candidates.append({"price": entry - tp_atr_mult * 1.6 * atr, "weight": 1, "method": f"ATR {round(tp_atr_mult * 1.6, 1)}x"})
 
         for s in supports[:10]:
             if s["price"] < entry:
@@ -137,9 +139,9 @@ def calculate_optimal_tp_sl(
         if total_w == 0:
             return candidates[0]["price"], candidates[0]["method"]
         wp = sum(c["price"] * c["weight"] for c in candidates) / total_w
-        # En yakın adayı bul
+        # Sentezik ortalama yerine en yakın GERÇEK seviyeyi döndür
         best = min(candidates, key=lambda c: abs(c["price"] - wp))
-        return round(wp, 6), best["method"]
+        return round(best["price"], 6), best["method"]
 
     # SL: en yakın güçlü adayları seç (max 5)
     sl_candidates.sort(key=lambda x: x["weight"], reverse=True)

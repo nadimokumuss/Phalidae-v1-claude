@@ -357,6 +357,10 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
 
     entry_price = df["close"].iloc[-1]
 
+    # Variant'ın TP/SL çarpanlarını al
+    variant_tp_mult = best_variant.tp_atr_mult if best_variant and best_variant.tp_atr_mult else 2.5
+    variant_sl_mult = best_variant.sl_atr_mult if best_variant and best_variant.sl_atr_mult else 1.5
+
     from signal_generator import calculate_optimal_tp_sl
     tp_sl = calculate_optimal_tp_sl(
         entry=entry_price,
@@ -364,6 +368,8 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
         bias=bias,
         all_levels=levels,
         fib_data=levels.get("fibonacci", {}),
+        tp_atr_mult=variant_tp_mult,
+        sl_atr_mult=variant_sl_mult,
     )
 
     if tp_sl["rr_ratio"] is None or tp_sl["rr_ratio"] < 1.5:
@@ -459,7 +465,6 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
 
     # Multi-TP calculation (Phase 2) — scaled by variant's tp_atr_mult
     from signal_generator import calculate_multi_tp
-    variant_tp_mult = best_variant.tp_atr_mult if best_variant and best_variant.tp_atr_mult else 2.5
     multi_tp = calculate_multi_tp(entry_price, atr, bias, tp_atr_mult=variant_tp_mult)
 
     # --- Smart Dedup: position-aware signal deduplication ---

@@ -197,7 +197,7 @@ def backtest_variant(
     volume_required: bool = True,
     custom_weights: dict = None,
     tp_atr_mult: float = 2.5,
-    sl_atr_mult: float = 1.75,
+    sl_atr_mult: float = 1.5,
 ) -> dict:
     """
     Walk-forward backtest of a strategy variant on pre-computed DataFrame.

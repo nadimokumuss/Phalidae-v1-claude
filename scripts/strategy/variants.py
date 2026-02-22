@@ -308,7 +308,7 @@ def generate_genetic_variants(top_n: int = 10, children: int = 15) -> int:
             # Evolve TP/SL multipliers from parents
             child_tp, child_sl = _blend_tp_sl(
                 p1.tp_atr_mult or 2.5, p2.tp_atr_mult or 2.5,
-                p1.sl_atr_mult or 1.75, p2.sl_atr_mult or 1.75,
+                p1.sl_atr_mult or 1.5, p2.sl_atr_mult or 1.5,
             )
 
             session.add(StrategyVariant(
