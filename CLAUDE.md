@@ -162,7 +162,7 @@ These files are protected by a pre-commit hook (see [Hooks](#hooks) section). An
 | Min trades for scoring | 20 | optimizer.py |
 | Timeframes | 5m, 15m, 30m, 1h, 4h | collector.py |
 | TF weights | 5m=0.05, 15m=0.10, 30m=0.15, 1h=0.25, 4h=0.35 | analyzer.py, signal_generator.py |
-| Bias threshold | +/-1.5 total score | analyzer.py |
+| Bias threshold | +/-1.0 total score | analyzer.py |
 | Max open trades/symbol | 1 | trader.py |
 | Max total open trades | 150 | trader.py, portfolio.py |
 | Max correlation | 0.95 | trader.py |
@@ -175,7 +175,7 @@ These files are protected by a pre-commit hook (see [Hooks](#hooks) section). An
 | Confidence: ORTA | >= 50/100 | analyzer.py |
 | Confidence: DUSUK | < 50/100 | analyzer.py |
 | Auto-trade gate | YUKSEK, ORTA, or DUSUK (50% size) | analyzer.py |
-| Dedup price threshold | 1.5% price change | analyzer.py |
+| Dedup price threshold | 0.5% price change | analyzer.py |
 | News risk skip | > 0.9 | analyzer.py |
 | News risk halve | > 0.7 | analyzer.py |
 | ccxt timeout | 15 seconds | analyzer.py, collector.py |

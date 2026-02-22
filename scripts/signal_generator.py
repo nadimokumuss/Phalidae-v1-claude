@@ -280,7 +280,7 @@ def analyze_symbol(
         fib_data=primary["levels"].get("fibonacci", {}),
     )
 
-    if tp_sl["rr_ratio"] is None or tp_sl["rr_ratio"] < 1.8:
+    if tp_sl["rr_ratio"] is None or tp_sl["rr_ratio"] < 1.2:
         return None
 
     # Tüm formasyonları topla
@@ -436,7 +436,7 @@ def analyze_symbol_with_strategy(
         fib_data=levels.get("fibonacci", {}),
     )
 
-    if tp_sl["rr_ratio"] is None or tp_sl["rr_ratio"] < 1.8:
+    if tp_sl["rr_ratio"] is None or tp_sl["rr_ratio"] < 1.2:
         return None
 
     abs_score = abs(total_score)

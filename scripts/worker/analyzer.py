@@ -36,7 +36,7 @@ COIN_BLACKLIST = {
 }
 
 # Auto-blacklist threshold: skip coins with >= this many consecutive losses
-AUTO_BLACKLIST_CONSECUTIVE_LOSSES = 5
+AUTO_BLACKLIST_CONSECUTIVE_LOSSES = 8
 # Auto-blacklist: minimum paper trade count to evaluate
 AUTO_BLACKLIST_MIN_TRADES = 5
 
@@ -312,9 +312,9 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
     total_score = round(final_ind_score + final_pat_score + chart_pattern_bonus + trend_line_bonus, 1)
 
     # Bias from full score (lower threshold for more learning signals)
-    if total_score >= 1.5:
+    if total_score >= 1.0:
         bias = "LONG"
-    elif total_score <= -1.5:
+    elif total_score <= -1.0:
         bias = "SHORT"
     else:
         return False
@@ -372,7 +372,7 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
         sl_atr_mult=variant_sl_mult,
     )
 
-    if tp_sl["rr_ratio"] is None or tp_sl["rr_ratio"] < 1.5:
+    if tp_sl["rr_ratio"] is None or tp_sl["rr_ratio"] < 1.2:
         return False
 
     # News risk check (Phase 4)
@@ -498,10 +498,10 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
                     logger.info(f"Dedup: {symbol} {bias} — last signal has invalid entry_price, allowing new signal")
                 else:
                     price_change = abs(entry_price - last_signal.entry_price) / last_signal.entry_price
-                    if price_change < 0.015:
+                    if price_change < 0.005:
                         logger.debug(
                             f"Dedup: {symbol} {bias} skipped — same bias, price change only {price_change:.1%} "
-                            f"(need >1.5%)"
+                            f"(need >0.5%)"
                         )
                         return False
                     logger.info(
