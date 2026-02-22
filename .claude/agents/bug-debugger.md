@@ -11,33 +11,39 @@ You are a debugging specialist for the Phalidae trading system. You diagnose iss
 
 ### Scheduler (APScheduler)
 - Jobs failing silently — check `max_instances=1` conflicts
-- Job timing overlap — 5min collector vs 15min analyzer race conditions
+- Job timing overlap — 5min collector vs 5min analyzer race conditions
 - Scheduler not starting — verify `start_scheduler()` is called in `app.py`
 - Job functions: `_job_collect()`, `_job_analyze()`, `_job_check_trades()`, `_job_optimize()`, `_job_market_data()`, `_job_refresh_symbols()`
 
 ### Data Collection (worker/collector.py)
-- `ccxt.binanceusdm` API errors — rate limits, network timeouts, invalid symbols
+- `ccxt.binanceusdm` API errors — rate limits, network timeouts (15s), invalid symbols
 - Missing candles — gaps in OHLCV data after backfill
 - Symbol refresh failures — Binance API returning unexpected format
 - Incremental collection missing latest candles
+- ccxt timeout must be 15000ms — lower causes hanging on Railway
 
-### Signal Generation (signal_generator.py)
+### Signal Generation (worker/analyzer.py + signal_generator.py)
 - Score calculation returning NaN — missing indicator data
 - Strategy composition referencing non-existent indicator keys
-- TP/SL calculation producing unreasonable values
-- Legacy vs strategy-based signal path confusion
+- TP/SL calculation producing unreasonable values — check `weighted_select` snap logic
+- Variant's `tp_atr_mult`/`sl_atr_mult` not being passed through pipeline
+- Dedup blocking valid signals — check price threshold (0.5%) and open trade check
+- Auto-blacklist skipping coins prematurely (8 consecutive losses threshold)
 
-### Concurrent Access
-- SQLite locking errors — WAL mode should prevent, but check session handling
-- Streamlit reruns conflicting with scheduler writes
-- `check_same_thread=False` side effects
-- Session not properly closed — look for missing `session.close()` or context manager
+### PostgreSQL / Connection Pool
+- **Pool exhaustion**: All sessions MUST be closed in `finally` blocks; unclosed sessions leak pool slots (pool_size=10, max_overflow=20)
+- **Stale connections**: `pool_recycle=1800` should handle; Railway may kill idle connections earlier
+- **Pool timeout**: `pool_timeout=30` — if all 30 slots busy, new requests fail after 30s
+- Streamlit reruns conflicting with scheduler writes — PostgreSQL handles concurrent access but check for long-held sessions
+- Session not properly closed — look for missing `session.close()` in `finally` blocks
 
 ### Paper Trading (paper_trader/)
-- P&L calculation errors — leverage, position size, direction (long/short)
+- P&L calculation errors — leverage (5x), position size (200 USD), direction (long/short)
 - Liquidation price formula — verify against exchange formula
 - Trade status not updating — `check_open_trades()` skipping conditions
 - Snapshot frequency — too many snapshots bloating DB
+- Partial TP logic — 50% close at TP1, SL moved to breakeven
+- Trailing stop tiers — 1.0x/1.5x/2.0x ATR profit thresholds
 
 ## Debugging Protocol
 1. **Reproduce** — Identify the minimal steps to trigger the issue

@@ -27,18 +27,26 @@ Verify the scoring formula is correctly applied:
 ```
 composite = 0.30 * win_rate + 0.25 * profit_factor + 0.20 * sharpe + 0.15 * (1 - drawdown) + 0.10 * trade_count_score
 ```
+Where: profit_factor capped at 3.0, sharpe capped at 3.0, trade_count capped at 100.
 
 ### Robustness Checks
 - Strategy should perform across multiple symbols, not just one
-- Performance should be consistent across timeframes (15m, 1h, 4h, 1d)
+- Backtester uses 4h timeframe with up to 3000 bars (Phase 3)
 - Max drawdown should not exceed 30% of total equity
 - Profit factor should be > 1.2 for a strategy to be considered viable
 - Check MFE/MAE ratios for trade quality assessment
+- Verify trailing stop tiers match between backtester and live trader (1.0x/1.5x/2.0x ATR)
 
 ### Genetic Algorithm Quality
-- Verify crossover produces meaningfully different variants
+- Verify crossover produces meaningfully different variants (composition + custom_weights + tp_atr_mult/sl_atr_mult)
 - Check that genetic offspring outperform random generation
-- Ensure seed strategies provide adequate initial diversity
+- Ensure seed strategies provide adequate initial diversity (~300 seed variants)
+- Verify `_blend_weights` and `_blend_tp_sl` produce reasonable offspring values
+
+### Paper Trade Feedback Loop
+- Compare backtest metrics with paper trading results (`paper_win_rate`, `paper_pnl_pct`)
+- Flag large discrepancies between backtest and paper performance
+- Verify that variant's `tp_atr_mult`/`sl_atr_mult` are consistently used in both backtest and live
 
 ## Output Format
 1. **Overall Assessment** — Pass/Fail with confidence level
