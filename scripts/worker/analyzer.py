@@ -366,7 +366,7 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
         fib_data=levels.get("fibonacci", {}),
     )
 
-    if tp_sl["rr_ratio"] is None or tp_sl["rr_ratio"] < 1.2:
+    if tp_sl["rr_ratio"] is None or tp_sl["rr_ratio"] < 1.5:
         return False
 
     # News risk check (Phase 4)
@@ -983,9 +983,9 @@ def _update_trailing_stop(
 ) -> float:
     """
     Phase 2 improved trailing stop:
-    0.5xATR profit -> SL = entry (breakeven, fees included)
-    1xATR profit -> SL = entry + 0.3xATR (small profit guaranteed)
-    2xATR profit -> trail 1xATR behind price
+    1.0xATR profit -> SL = entry (breakeven)
+    1.5xATR profit -> SL = entry + 0.5xATR (profit lock)
+    2.0xATR profit -> trail 1xATR behind price
     """
     old_trailing = current_trailing
     if bias == "LONG":
@@ -994,11 +994,11 @@ def _update_trailing_stop(
             new_trail = current_price - atr
             if new_trail > current_trailing:
                 current_trailing = new_trail
-        elif profit >= atr:
-            target = entry_price + 0.3 * atr
+        elif profit >= 1.5 * atr:
+            target = entry_price + 0.5 * atr
             if target > current_trailing:
                 current_trailing = target
-        elif profit >= 0.5 * atr:
+        elif profit >= 1.0 * atr:
             if entry_price > current_trailing:
                 current_trailing = entry_price
     else:  # SHORT
@@ -1007,11 +1007,11 @@ def _update_trailing_stop(
             new_trail = current_price + atr
             if new_trail < current_trailing:
                 current_trailing = new_trail
-        elif profit >= atr:
-            target = entry_price - 0.3 * atr
+        elif profit >= 1.5 * atr:
+            target = entry_price - 0.5 * atr
             if target < current_trailing:
                 current_trailing = target
-        elif profit >= 0.5 * atr:
+        elif profit >= 1.0 * atr:
             if entry_price < current_trailing:
                 current_trailing = entry_price
 

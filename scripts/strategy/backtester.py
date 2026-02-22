@@ -21,7 +21,7 @@ DEFAULT_LEVERAGE = 5.0
 DEFAULT_POSITION_SIZE = 200.0   # USD (learning mode: smaller positions)
 WARMUP_BARS = 200
 TP_ATR_MULT = 2.5
-SL_ATR_MULT = 1.75
+SL_ATR_MULT = 1.5
 FEE_RATE = 0.0004       # Taker fee per side (%0.04)
 SLIPPAGE_RATE = 0.0002  # Estimated slippage per side (%0.02)
 
@@ -129,14 +129,17 @@ def _simulate_trade(
             max_adverse = min(max_adverse, bar_worst_pct)
 
             # 3-tier trailing stop (matches live trader in analyzer.py)
+            # 1.0xATR profit -> SL = entry (breakeven)
+            # 1.5xATR profit -> SL = entry + 0.5xATR (profit lock)
+            # 2.0xATR profit -> trail 1xATR behind price
             current_profit = (high - entry_price)
             if current_profit >= 2 * atr:
                 new_trail = high - atr
                 trailing_sl = max(trailing_sl, new_trail)
-            elif current_profit >= atr:
-                target = entry_price + 0.3 * atr
+            elif current_profit >= 1.5 * atr:
+                target = entry_price + 0.5 * atr
                 trailing_sl = max(trailing_sl, target)
-            elif current_profit >= 0.5 * atr:
+            elif current_profit >= 1.0 * atr:
                 trailing_sl = max(trailing_sl, entry_price)
 
             if high >= tp_price:
@@ -154,14 +157,17 @@ def _simulate_trade(
             max_adverse = min(max_adverse, bar_worst_pct)
 
             # 3-tier trailing stop (matches live trader in analyzer.py)
+            # 1.0xATR profit -> SL = entry (breakeven)
+            # 1.5xATR profit -> SL = entry - 0.5xATR (profit lock)
+            # 2.0xATR profit -> trail 1xATR behind price
             current_profit = (entry_price - low)
             if current_profit >= 2 * atr:
                 new_trail = low + atr
                 trailing_sl = min(trailing_sl, new_trail)
-            elif current_profit >= atr:
-                target = entry_price - 0.3 * atr
+            elif current_profit >= 1.5 * atr:
+                target = entry_price - 0.5 * atr
                 trailing_sl = min(trailing_sl, target)
-            elif current_profit >= 0.5 * atr:
+            elif current_profit >= 1.0 * atr:
                 trailing_sl = min(trailing_sl, entry_price)
 
             if low <= tp_price:
