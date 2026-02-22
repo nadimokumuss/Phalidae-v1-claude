@@ -15,11 +15,12 @@ from paper_trader.position import calculate_pnl
 logger = logging.getLogger("phalidae.portfolio")
 
 INITIAL_CAPITAL = 100_000.0
-MAX_RISK_PER_TRADE_PCT = 1.0          # Small positions, many trades (learning mode)
-MAX_TOTAL_EXPOSURE_PCT = 95.0          # 150 coins x ~$600 = $90K
-MAX_POSITION_SIZE_USD = 800.0          # Hard cap per trade (learning mode: small + many)
+MAX_RISK_PER_TRADE_PCT = 0.5           # Reduced: smaller risk per trade
+MAX_TOTAL_EXPOSURE_PCT = 80.0          # Reduced: lower total exposure
+MAX_POSITION_SIZE_USD = 400.0          # Reduced: hard cap per trade
 MAX_OPEN_POSITIONS = 150               # ~120-150 active coins = theoretical max
-MAX_DAILY_LOSS_PCT = 15.0              # Learning mode: higher tolerance
+MAX_DAILY_LOSS_PCT = 10.0              # Reduced: stricter daily loss limit
+MAX_LOSS_PER_TRADE_USD = 300.0         # New: absolute max loss per trade in USD
 
 
 def get_portfolio_equity() -> float:
@@ -96,7 +97,40 @@ def calculate_position_size(
     max_per_position = (equity * MAX_TOTAL_EXPOSURE_PCT / 100) / max(open_count + 1, 1)
     position_size = max(100.0, min(position_size, max_per_position, MAX_POSITION_SIZE_USD))
 
+    # Validate max loss cap
+    position_size = validate_max_loss(position_size, entry, sl, leverage)
+
     return round(position_size, 2)
+
+
+def validate_max_loss(
+    position_size: float,
+    entry: float,
+    sl: float,
+    leverage: float = 5.0,
+) -> float:
+    """
+    Ensure that the worst-case loss (SL hit) does not exceed MAX_LOSS_PER_TRADE_USD.
+    If it would, shrink position_size until max loss = $300.
+    Returns adjusted position_size.
+    """
+    if entry <= 0 or sl <= 0:
+        return position_size
+
+    distance_pct = abs(entry - sl) / entry
+    potential_loss = position_size * distance_pct * leverage
+
+    if potential_loss > MAX_LOSS_PER_TRADE_USD:
+        # Shrink position to cap loss at MAX_LOSS_PER_TRADE_USD
+        safe_size = MAX_LOSS_PER_TRADE_USD / (distance_pct * leverage)
+        safe_size = max(50.0, safe_size)  # Minimum $50
+        logger.info(
+            f"Max loss cap: ${potential_loss:.0f} > ${MAX_LOSS_PER_TRADE_USD:.0f}, "
+            f"reducing position ${position_size:.0f} -> ${safe_size:.0f}"
+        )
+        return round(safe_size, 2)
+
+    return position_size
 
 
 def can_open_trade(symbol: str = None) -> tuple[bool, str]:

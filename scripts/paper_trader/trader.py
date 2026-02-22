@@ -170,6 +170,13 @@ def open_paper_trade(
             _finish_agent_job(job_id, "SUCCESS", 0, context={"rejected": "correlation"})
             return None
 
+        # Defense layer: validate max loss cap on position size
+        try:
+            from paper_trader.portfolio import validate_max_loss
+            position_size_usd = validate_max_loss(position_size_usd, entry_price, sl_price, leverage)
+        except ImportError:
+            pass
+
         # Calculate liquidation price
         pnl_info = calculate_pnl(entry_price, entry_price, bias, leverage, position_size_usd)
 

@@ -179,8 +179,8 @@ def generate_random_variants(count: int = 20) -> int:
                 entry_threshold=round(random.uniform(0.15, 0.5), 2),
                 volume_required=random.choice([True, False]),
                 custom_weights=_random_weights_perturbation(),
-                tp_atr_mult=round(random.uniform(1.5, 4.0), 2),
-                sl_atr_mult=round(random.uniform(1.0, 3.0), 2),
+                tp_atr_mult=round(random.uniform(2.0, 4.5), 2),
+                sl_atr_mult=round(random.uniform(0.8, 2.0), 2),
             ))
             created += 1
 
@@ -228,12 +228,12 @@ def _blend_tp_sl(tp1: float, tp2: float, sl1: float, sl2: float) -> tuple[float,
 
     # 10% aggressive mutation: completely random value
     if random.random() < 0.1:
-        child_tp = random.uniform(1.5, 4.0)
+        child_tp = random.uniform(2.0, 4.5)
     if random.random() < 0.1:
-        child_sl = random.uniform(1.0, 3.0)
+        child_sl = random.uniform(0.8, 2.0)
 
-    child_tp = round(max(1.5, min(4.0, child_tp)), 2)
-    child_sl = round(max(1.0, min(3.0, child_sl)), 2)
+    child_tp = round(max(2.0, min(4.5, child_tp)), 2)
+    child_sl = round(max(0.8, min(2.0, child_sl)), 2)
     return child_tp, child_sl
 
 

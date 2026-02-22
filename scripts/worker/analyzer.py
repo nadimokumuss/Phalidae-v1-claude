@@ -311,10 +311,10 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
     # --- Total score (4 components like manual scan) ---
     total_score = round(final_ind_score + final_pat_score + chart_pattern_bonus + trend_line_bonus, 1)
 
-    # Bias from full score (lower threshold for more learning signals)
-    if total_score >= 1.0:
+    # Bias from full score (raised threshold to filter weak signals)
+    if total_score >= 1.5:
         bias = "LONG"
-    elif total_score <= -1.0:
+    elif total_score <= -1.5:
         bias = "SHORT"
     else:
         return False
@@ -358,8 +358,8 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
     entry_price = df["close"].iloc[-1]
 
     # Variant'ın TP/SL çarpanlarını al
-    variant_tp_mult = best_variant.tp_atr_mult if best_variant and best_variant.tp_atr_mult else 2.5
-    variant_sl_mult = best_variant.sl_atr_mult if best_variant and best_variant.sl_atr_mult else 1.5
+    variant_tp_mult = best_variant.tp_atr_mult if best_variant and best_variant.tp_atr_mult else 3.0
+    variant_sl_mult = best_variant.sl_atr_mult if best_variant and best_variant.sl_atr_mult else 1.25
 
     from signal_generator import calculate_optimal_tp_sl
     tp_sl = calculate_optimal_tp_sl(
@@ -372,7 +372,7 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
         sl_atr_mult=variant_sl_mult,
     )
 
-    if tp_sl["rr_ratio"] is None or tp_sl["rr_ratio"] < 1.2:
+    if tp_sl["rr_ratio"] is None or tp_sl["rr_ratio"] < 1.5:
         return False
 
     # News risk check (Phase 4)
@@ -573,31 +573,42 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
     finally:
         session.close()
 
-    # Auto paper trade if configured (learning mode: DUSUK also trades)
-    if config.auto_trade and confidence in ("YUKSEK", "ORTA", "DUSUK"):
-        # Reduce position size if news risk is high
-        position_size_override = None
-        if news_risk > 0.7:
-            position_size_override = (config.max_position_size or 200.0) * 0.5
-            logger.info(f"News risk {news_risk:.2f}: halving position size for {symbol}")
+    # Auto paper trade — regime-aware quality gate
+    # HIGH_VOLATILITY: no trades (signal is saved for learning but too risky)
+    # TRENDING_UP / BREAKOUT: only YUKSEK confidence
+    # DUSUK confidence: never trade (removed entirely)
+    # ORTA confidence: 70% position size
+    if config.auto_trade and confidence in ("YUKSEK", "ORTA"):
+        # Regime filter: block HIGH_VOLATILITY entirely
+        if current_regime == "HIGH_VOLATILITY":
+            logger.info(f"Regime filter: {symbol} skipped — HIGH_VOLATILITY regime, no trade")
+        # Regime filter: TRENDING_UP and BREAKOUT require YUKSEK confidence
+        elif current_regime in ("TRENDING_UP", "BREAKOUT") and confidence != "YUKSEK":
+            logger.info(f"Regime filter: {symbol} skipped — {current_regime} requires YUKSEK (got {confidence})")
+        else:
+            # Position size adjustments
+            position_size_override = None
+            if news_risk > 0.7:
+                position_size_override = (config.max_position_size or 200.0) * 0.5
+                logger.info(f"News risk {news_risk:.2f}: halving position size for {symbol}")
 
-        # DUSUK confidence: 50% smaller position for learning with less risk
-        if confidence == "DUSUK" and position_size_override is None:
-            position_size_override = (config.max_position_size or 200.0) * 0.5
+            # ORTA confidence: 70% position size
+            if confidence == "ORTA" and position_size_override is None:
+                position_size_override = (config.max_position_size or 200.0) * 0.7
 
-        open_paper_trade(
-            signal_id=signal_id,
-            symbol=symbol,
-            bias=bias,
-            entry_price=entry_price,
-            tp_price=multi_tp.get("tp1", tp_sl["tp"]),
-            sl_price=tp_sl["sl"],
-            reasoning=signal.reasoning,
-            regime_at_entry=current_regime,
-            position_size_usd=position_size_override,
-            tp2_price=multi_tp.get("tp2"),
-            tp3_price=multi_tp.get("tp3"),
-        )
+            open_paper_trade(
+                signal_id=signal_id,
+                symbol=symbol,
+                bias=bias,
+                entry_price=entry_price,
+                tp_price=multi_tp.get("tp1", tp_sl["tp"]),
+                sl_price=tp_sl["sl"],
+                reasoning=signal.reasoning,
+                regime_at_entry=current_regime,
+                position_size_usd=position_size_override,
+                tp2_price=multi_tp.get("tp2"),
+                tp3_price=multi_tp.get("tp3"),
+            )
 
     return True
 

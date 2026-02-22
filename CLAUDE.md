@@ -155,26 +155,29 @@ These files are protected by a pre-commit hook (see [Hooks](#hooks) section). An
 |----------|-------|----------|
 | Default leverage | 5x | backtester.py, trader.py |
 | Position size | 200 USD | backtester.py, trader.py |
-| TP ATR multiplier | 2.5x (default, adaptive per variant) | backtester.py, models.py |
-| SL ATR multiplier | 1.75x (default, adaptive per variant) | backtester.py, models.py |
-| TP1 ATR multiplier | 0.48×tp_atr_mult (default 1.2x) | signal_generator.py |
+| TP ATR multiplier | 3.0x (default, adaptive per variant) | backtester.py, models.py |
+| SL ATR multiplier | 1.25x (default, adaptive per variant) | backtester.py, models.py |
+| TP1 ATR multiplier | 0.48×tp_atr_mult (default 1.44x) | signal_generator.py |
 | Warmup bars | 200 | backtester.py |
 | Min trades for scoring | 20 | optimizer.py |
 | Timeframes | 5m, 15m, 30m, 1h, 4h | collector.py |
 | TF weights | 5m=0.05, 15m=0.10, 30m=0.15, 1h=0.25, 4h=0.35 | analyzer.py, signal_generator.py |
-| Bias threshold | +/-1.0 total score | analyzer.py |
+| Bias threshold | +/-1.5 total score | analyzer.py |
+| R:R minimum | 1.5 | analyzer.py, signal_generator.py |
 | Max open trades/symbol | 1 | trader.py |
 | Max total open trades | 150 | trader.py, portfolio.py |
 | Max correlation | 0.95 | trader.py |
 | Daily drawdown limit | 10% (per coin, configurable) | trader.py |
 | Initial capital | 100,000 USD (learning mode) | portfolio.py |
-| Max risk per trade | 1% | portfolio.py |
-| Max total exposure | 90% | portfolio.py |
-| Max daily loss | 15% | portfolio.py |
+| Max risk per trade | 0.5% | portfolio.py |
+| Max total exposure | 80% | portfolio.py |
+| Max position size | $400 | portfolio.py |
+| Max loss per trade | $300 | portfolio.py |
+| Max daily loss | 10% | portfolio.py |
 | Confidence: YUKSEK | >= 75/100 | analyzer.py |
 | Confidence: ORTA | >= 50/100 | analyzer.py |
 | Confidence: DUSUK | < 50/100 | analyzer.py |
-| Auto-trade gate | YUKSEK, ORTA, or DUSUK (50% size) | analyzer.py |
+| Auto-trade gate | YUKSEK + ORTA (70% size); no DUSUK; no HIGH_VOL | analyzer.py |
 | Dedup price threshold | 0.5% price change | analyzer.py |
 | News risk skip | > 0.9 | analyzer.py |
 | News risk halve | > 0.7 | analyzer.py |
