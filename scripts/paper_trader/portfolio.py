@@ -16,7 +16,8 @@ logger = logging.getLogger("phalidae.portfolio")
 
 INITIAL_CAPITAL = 100_000.0
 MAX_RISK_PER_TRADE_PCT = 1.0          # Small positions, many trades (learning mode)
-MAX_TOTAL_EXPOSURE_PCT = 90.0          # ~150 coins x $200 = $30K, plenty of room
+MAX_TOTAL_EXPOSURE_PCT = 95.0          # 150 coins x ~$600 = $90K
+MAX_POSITION_SIZE_USD = 800.0          # Hard cap per trade (learning mode: small + many)
 MAX_OPEN_POSITIONS = 150               # ~120-150 active coins = theoretical max
 MAX_DAILY_LOSS_PCT = 15.0              # Learning mode: higher tolerance
 
@@ -93,7 +94,7 @@ def calculate_position_size(
         session.close()
 
     max_per_position = (equity * MAX_TOTAL_EXPOSURE_PCT / 100) / max(open_count + 1, 1)
-    position_size = max(100.0, min(position_size, max_per_position, equity * 0.5))
+    position_size = max(100.0, min(position_size, max_per_position, MAX_POSITION_SIZE_USD))
 
     return round(position_size, 2)
 
