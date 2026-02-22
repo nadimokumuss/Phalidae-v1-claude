@@ -73,6 +73,8 @@ def create_all():
 def _run_migrations():
     """Add missing columns to existing tables. Safe to run multiple times."""
     import logging
+    from sqlalchemy import text, inspect
+
     logger = logging.getLogger("phalidae.migrations")
 
     migrations = [
@@ -101,15 +103,38 @@ def _run_migrations():
     ]
 
     engine = get_engine()
+
+    # Pre-check existing columns to skip unnecessary ALTER TABLEs
+    inspector = inspect(engine)
+    existing = {}
+    for table_name in {m[0] for m in migrations}:
+        try:
+            cols = inspector.get_columns(table_name)
+            existing[table_name] = {c["name"] for c in cols}
+        except Exception:
+            existing[table_name] = set()
+
+    needed = [
+        (t, c, ct) for t, c, ct in migrations
+        if c not in existing.get(t, set())
+    ]
+
+    if not needed:
+        logger.info("Migrations: all columns already exist, nothing to do")
+        return
+
     with engine.connect() as conn:
-        for table, column, col_type in migrations:
+        # Set lock timeout to 5s to prevent deadlocks on concurrent startup
+        conn.execute(text("SET lock_timeout = '5s'"))
+        for table, column, col_type in needed:
             try:
                 conn.execute(
-                    __import__("sqlalchemy").text(
+                    text(
                         f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}"
                     )
                 )
+                logger.info(f"Migration added: {table}.{column}")
             except Exception as e:
                 logger.warning(f"Migration skip {table}.{column}: {e}")
         conn.commit()
-    logger.info(f"Migrations checked: {len(migrations)} columns")
+    logger.info(f"Migrations applied: {len(needed)} columns")
