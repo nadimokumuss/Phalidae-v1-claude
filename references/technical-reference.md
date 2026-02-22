@@ -60,12 +60,12 @@ scripts/
 |-------|----|-----------------|----|
 | `ohlcv_data` | id | symbol, timeframe, timestamp, open, high, low, close, volume | (symbol, timeframe, timestamp) |
 | `tracked_symbols` | id | symbol, rank, is_active, data_since | symbol |
-| `strategy_variants` | id | name, composition(JSON), trend/entry_threshold, volume_required | - |
+| `strategy_variants` | id | name, composition(JSON), trend/entry_threshold, volume_required, custom_weights(JSON), tp_atr_mult(Float), sl_atr_mult(Float) | - |
 | `strategy_performance` | id | strategy_variant_id(FK), symbol, total_trades, win_rate, profit_factor, sharpe_ratio, max_drawdown, total_pnl_pct, composite_score, rank, regime_trending/ranging/volatile_score, paper_total, paper_wins, paper_win_rate, paper_pnl_pct | (strategy_variant_id, symbol) |
 | `signals` | id | symbol, bias, entry/tp/sl_price, rr_ratio, confidence, score, strategy_variant_id(FK), score_breakdown(JSON), indicator_scores(JSON), detected_patterns(JSON), reasoning, regime, alternative_signals(JSON), rejection_reasons(JSON), confidence_score, confidence_breakdown(JSON), eta_hours_low/high, news_risk_score, invalidation_note | - |
 | `paper_trades` | id | signal_id(FK), symbol, bias, entry/tp/sl/exit_price, leverage, liquidation_price, position_size_usd, status, pnl_usd/pnl_percent, max_drawdown/max_profit, mfe_pct/mae_pct, trailing_stop_price, partial_tp_taken, partial_tp_price, partial_tp_pnl, tp2_price, tp3_price, risk_pct, regime_at_entry, exit_reason, reasoning | - |
 | `trade_snapshots` | id | paper_trade_id(FK), timestamp, current_price, unrealized_pnl | - |
-| `coin_config` | id | symbol, best_strategy_id(FK), auto_trade, leverage, max_position_size, daily_drawdown_limit, trailing_stop_enabled, time_stop_bars | symbol |
+| `coin_config` | id | symbol, best_strategy_id(FK), best_trending_strategy_id(FK), best_ranging_strategy_id(FK), best_volatile_strategy_id(FK), auto_trade, leverage, max_position_size, daily_drawdown_limit, trailing_stop_enabled, time_stop_bars | symbol |
 | `funding_data` | id | symbol, timestamp, funding_rate, open_interest, spread_pct | (symbol, timestamp) |
 | `market_regime_records` | id | symbol, timeframe, timestamp, regime_label, adx_value, choppiness_value, atr_percentile, ema_slope | (symbol, timeframe, timestamp) |
 | `correlation_cache` | id | symbol_a, symbol_b, correlation, computed_at | (symbol_a, symbol_b) |
@@ -83,6 +83,9 @@ Signal ──1:N──→ PaperTrade (via signal_id)
 PaperTrade ──1:N──→ TradeSnapshot (via paper_trade_id)
 PaperTrade ──1:N──→ TradeManagementLog (via paper_trade_id)
 CoinConfig.best_strategy_id ──FK──→ StrategyVariant
+CoinConfig.best_trending_strategy_id ──FK──→ StrategyVariant
+CoinConfig.best_ranging_strategy_id ──FK──→ StrategyVariant
+CoinConfig.best_volatile_strategy_id ──FK──→ StrategyVariant
 ```
 
 ### Connection Pooling
@@ -172,10 +175,10 @@ Her coin için:
   5. 4h verisinden get_all_levels() → chart_pattern_bonus (±3 max)
   6. 4h verisinden trend_line_bonus (±2 max)
   7. total_score = ind + pat + chart_pattern + trend_line
-  8. Bias: ≥+2.0 → LONG, ≤-2.0 → SHORT, arası → skip
-  9. Smart Dedup kontrolü
-  10. Confidence scoring (7 bileşen, 100 puan)
-  11. Sinyal kaydet → auto paper trade (ORTA/YUKSEK ise)
+  8. Bias: ≥+1.5 → LONG, ≤-1.5 → SHORT, arası → skip
+  9. Smart Dedup kontrolü (fiyat %1.5 değişmediyse → skip)
+  10. Confidence scoring (7 bileşen, 100 puan, rejim-spesifik WR dahil)
+  11. Sinyal kaydet → auto paper trade (ORTA/YUKSEK tam, DUSUK %50 boyut)
 ```
 
 ---
@@ -190,10 +193,10 @@ open_trade = session.query(PaperTrade).filter(
     symbol=symbol, bias=bias, status="OPEN"
 ).first()
 
-# 2. Son sinyal aynı bias ve fiyat <3% değiştiyse → skip
+# 2. Son sinyal aynı bias ve fiyat <1.5% değiştiyse → skip
 if last_signal.bias == bias:
     price_change = abs(entry - last_signal.entry) / last_signal.entry
-    if price_change < 0.03:  # %3'ten az → skip
+    if price_change < 0.015:  # %1.5'ten az → skip
         return False
 
 # 3. Bias flip (LONG→SHORT veya tersi) → her zaman izin ver
@@ -228,9 +231,9 @@ if backtest_wr == 0:
 ### Etiketler ve Auto-Trade Gate
 
 ```python
-YUKSEK = conf_score >= 75   # Yüksek güven → auto trade
-ORTA   = conf_score >= 50   # Orta güven → auto trade
-DUSUK  = conf_score < 50    # Düşük güven → sadece kaydet, trade açma
+YUKSEK = conf_score >= 75   # Yüksek güven → auto trade (tam boyut)
+ORTA   = conf_score >= 50   # Orta güven → auto trade (tam boyut)
+DUSUK  = conf_score < 50    # Düşük güven → auto trade (%50 boyut)
 ```
 
 ### Hacim Onayı (Volume Confirmation)
@@ -285,19 +288,19 @@ get_news_risk_score(symbol)
 ### Sabit Değerler (trader.py)
 ```python
 DEFAULT_LEVERAGE = 5.0
-DEFAULT_POSITION_SIZE = 1000.0  # USD
+DEFAULT_POSITION_SIZE = 200.0   # USD (learning mode)
 MAX_OPEN_TRADES_PER_SYMBOL = 1
-MAX_TOTAL_OPEN_TRADES = 20
+MAX_TOTAL_OPEN_TRADES = 150
 MAX_CORRELATION = 0.95  # Açık tradelarle korelasyon limiti
 ```
 
 ### İşlem Açma Kontrolleri
 1. **Portföy kontrolü**: `can_open_trade()` + `calculate_position_size()`
 2. **Coin başına limit**: Max 1 açık trade/coin
-3. **Toplam limit**: Max 20 açık trade
+3. **Toplam limit**: Max 150 açık trade
 4. **Günlük drawdown**: Coin bazlı (varsayılan -%10, CoinConfig'den ayarlanabilir)
 5. **Korelasyon**: Açık trade'lerle korelasyon > 0.95 ise reddet
-6. **Güven skoru**: Sadece ORTA/YUKSEK güvenle auto-trade
+6. **Güven skoru**: YUKSEK/ORTA tam boyut, DUSUK %50 boyut
 
 ### Multi-TP (Phase 2)
 ```
@@ -372,9 +375,11 @@ _assign_fallback_strategies()
 ### Rejim-Spesifik Strateji Seçimi
 ```python
 _get_regime_best_strategy(session, symbol, regime)
-# Trending rejim → regime_trending_score en yüksek strateji
-# Volatile rejim → regime_volatile_score en yüksek strateji
-# Ranging rejim → regime_ranging_score en yüksek strateji
+# CoinConfig lookup ile (query yerine):
+# TRENDING_UP/DOWN → config.best_trending_strategy_id
+# HIGH_VOLATILITY/BREAKOUT → config.best_volatile_strategy_id
+# RANGING/LOW_VOLATILITY → config.best_ranging_strategy_id
+# None ise → genel best_strategy_id'ye fallback
 ```
 
 ---
@@ -404,8 +409,8 @@ SHORT: avg(trend_scores) <= -trend_threshold
 
 ### Üretim Yöntemleri
 1. **Seed** (~300): Top indikatör kombinasyonları (ilk çalıştırmada)
-2. **Random** (10/döngü): Rastgele keşif
-3. **Genetic** (10/döngü): En iyi varyantların crossover'ı
+2. **Random** (10/döngü): Rastgele keşif (custom_weights pertürbasyon %30, TP/SL rastgele)
+3. **Genetic** (10/döngü): En iyi varyantların crossover'ı (ağırlık blendleme + TP/SL evrimi + %15 mutasyon)
 
 ---
 
@@ -430,14 +435,14 @@ BB Position (1.2×), Squeeze (1.4×), Keltner (0.8×), Donchian (0.7×), Choppin
 ### indicators.py
 - `compute_all_indicators(df)` → 67 indikatörü DataFrame'e ekler
 - `score_all_indicators(df)` → 45 kriteri puanlar, `{"scores": {...}, "total_normalized": float}` döner
-- `score_selected_indicators(df, keys)` → Seçili key'leri puanlar (strateji bazlı)
-- `INDICATOR_WEIGHTS` → Her scoring key'in ağırlığı (0.5-1.6)
+- `score_selected_indicators(df, keys, custom_weights=None)` → Seçili key'leri puanlar (strateji bazlı, opsiyonel custom ağırlıklar)
+- `INDICATOR_WEIGHTS` → Her scoring key'in ağırlığı (0.5-1.6), custom_weights ile override edilebilir
 
 ### signal_generator.py
 - `analyze_symbol(exchange, symbol, timeframes)` → Manuel canlı tarama
 - `calculate_optimal_tp_sl(entry, atr, bias, all_levels, fib_data)` → 6-yöntemli TP/SL
 - `calculate_confidence_score(indicator_scores, pattern_count, regime, rr_ratio, news_risk, backtest_win_rate, volume_confirmation)` → 7-bileşenli güven skoru
-- `calculate_multi_tp(entry, atr, bias)` → TP1/TP2/TP3 hesapla
+- `calculate_multi_tp(entry, atr, bias, tp_atr_mult=2.5)` → TP1/TP2/TP3 hesapla (adaptif, varyant TP çarpanına göre oransal)
 - `estimate_time_to_target(symbol, bias, entry, tp)` → ETA tahmini (saat)
 
 ### worker/analyzer.py
@@ -466,9 +471,9 @@ BB Position (1.2×), Squeeze (1.4×), Keltner (0.8×), Donchian (0.7×), Choppin
 - `_compute_correlations(symbol_list)` → Sembol arası korelasyon matrisi
 
 ### strategy/backtester.py
-- `backtest_variant(df, composition, ...)` → Walk-forward backtest (200 bar warmup, max 100 bar hold)
-- `_check_signal(df, bar_idx, keys, ...)` → Belirli bar'da sinyal var mı
-- `_simulate_trade(df, entry_idx, bias, atr)` → TP/SL simülasyonu (trailing stop dahil)
+- `backtest_variant(df, composition, ..., custom_weights=None, tp_atr_mult=2.5, sl_atr_mult=1.75)` → Walk-forward backtest (200 bar warmup, max 100 bar hold, adaptif TP/SL)
+- `_check_signal(df, bar_idx, keys, ..., custom_weights=None)` → Belirli bar'da sinyal var mı
+- `_simulate_trade(df, entry_idx, bias, atr, tp_atr_mult=2.5, sl_atr_mult=1.75)` → TP/SL simülasyonu (trailing stop dahil, adaptif çarpanlar)
 - `_compute_regime_scores(trades)` → Rejim bazlı win rate
 
 ### paper_trader/trader.py

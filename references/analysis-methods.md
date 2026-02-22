@@ -167,10 +167,18 @@ weighted_sum = Σ (skor_i × ağırlık_i)
 weight_total = Σ ağırlık_i
 normalized = (weighted_sum / weight_total) * 10
 
+# signal_generator.py (manuel tarama):
 if normalized >= 2.5 → LONG
 if normalized <= -2.5 → SHORT
 else → NÖTR
+
+# analyzer.py (otomatik analiz):
+if total_score >= 1.5 → LONG
+if total_score <= -1.5 → SHORT
+else → NÖTR
 ```
+
+**Not:** Strateji varyantları `custom_weights` JSON'u taşıyabilir. Bu durumda global `INDICATOR_WEIGHTS` yerine varyantın kendi ağırlıkları kullanılır. Genetik algoritma bu ağırlıkları da evrimleştirir.
 
 ---
 

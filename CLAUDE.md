@@ -155,9 +155,9 @@ These files are protected by a pre-commit hook (see [Hooks](#hooks) section). An
 |----------|-------|----------|
 | Default leverage | 5x | backtester.py, trader.py |
 | Position size | 200 USD | backtester.py, trader.py |
-| TP ATR multiplier | 2.5x | backtester.py |
-| SL ATR multiplier | 1.75x | backtester.py |
-| TP1 ATR multiplier | 1.2x | signal_generator.py |
+| TP ATR multiplier | 2.5x (default, adaptive per variant) | backtester.py, models.py |
+| SL ATR multiplier | 1.75x (default, adaptive per variant) | backtester.py, models.py |
+| TP1 ATR multiplier | 0.48×tp_atr_mult (default 1.2x) | signal_generator.py |
 | Warmup bars | 200 | backtester.py |
 | Min trades for scoring | 20 | optimizer.py |
 | Timeframes | 5m, 15m, 30m, 1h, 4h | collector.py |
@@ -200,23 +200,24 @@ For each of ~242 active coins (filtered):
   6. Chart pattern bonus from 4h levels (±3 max)
   7. Trend line bonus from 4h levels (±2 max)
   8. total_score = indicators + patterns + chart_patterns + trend_lines
-  9. Bias: >= +2.0 → LONG, <= -2.0 → SHORT, else skip
- 10. Smart dedup check (open trade? same signal? price moved >3%?)
- 11. Confidence scoring (7 components, 100-point scale)
- 12. Save signal → auto paper trade if ORTA/YUKSEK confidence
+  9. Bias: >= +1.5 → LONG, <= -1.5 → SHORT, else skip
+ 10. Smart dedup check (open trade? same signal? price moved >1.5%?)
+ 11. Confidence scoring (7 components, 100-point scale, regime-specific WR)
+ 12. Save signal → auto paper trade (YUKSEK, ORTA, or DUSUK at 50% size)
 ```
 
 ### Strategy Optimization Flow (Optimizer - every 6h)
 
 ```
-1. Generate 10 random exploration variants
-2. Generate 10 genetic crossover variants (from top performers)
+1. Generate 10 random exploration variants (with random TP/SL + optional weight perturbation)
+2. Generate 10 genetic crossover variants (evolves composition + weights + TP/SL)
 3. For each coin × each variant:
    → Walk-forward backtest on historical 4h data (up to 3000 bars)
+   → Uses variant's custom_weights, tp_atr_mult, sl_atr_mult
    → Calculate: win_rate, profit_factor, sharpe, max_drawdown
    → Composite score = weighted sum of normalized metrics
 4. Rank strategies per coin (rank=1 = best)
-5. Update CoinConfig.best_strategy_id
+5. Update CoinConfig: best_strategy_id + best_trending/ranging/volatile_strategy_id
 6. Compute pairwise correlations between symbols
 ```
 

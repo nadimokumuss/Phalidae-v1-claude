@@ -45,11 +45,11 @@ Her coin için:
   4. Ağırlıklı ortalama: final_ind_score + final_pat_score
   5. 4h verisinden chart pattern bonus (±3) + trend line bonus (±2)
   6. total_score = ind + pat + chart_pattern + trend_line
-  7. Bias: ≥+2.0 → LONG, ≤-2.0 → SHORT, arası → skip
-  8. Smart Dedup: açık trade var mı? aynı sinyal? fiyat %3 değişti mi?
-  9. 7-bileşenli güven skoru (100 puan)
+  7. Bias: ≥+1.5 → LONG, ≤-1.5 → SHORT, arası → skip
+  8. Smart Dedup: açık trade var mı? aynı sinyal? fiyat %1.5 değişti mi?
+  9. 7-bileşenli güven skoru (100 puan, rejim-spesifik WR dahil)
   10. News risk kontrolü (>0.9 → skip, >0.7 → pozisyon %50)
-  11. Sinyal kaydet → ORTA/YÜKSEK güven → auto paper trade
+  11. Sinyal kaydet → YUKSEK/ORTA tam boyut, DUSUK %50 boyut → auto paper trade
 ```
 
 ### 3. Trade Kontrolü (Her 5 dakikada)
@@ -70,8 +70,8 @@ Açık paper trade'ler için:
 
 ### 4. Strateji Optimizasyonu (Her 6 saatte)
 ```
-1. 10 yeni rastgele varyant üret (keşif)
-2. En iyi varyantlardan 10 genetik çocuk üret (evrim)
+1. 10 yeni rastgele varyant üret (keşif, custom_weights pertürbasyon %30, TP/SL rastgele)
+2. En iyi varyantlardan 10 genetik çocuk üret (evrim: ağırlık blendleme + TP/SL evrimi + %15 mutasyon)
 3. Tüm varyantları (300+) × top 30 coin backtest et:
    a. 4h verisini DB'den çek (3000 mum'a kadar)
    b. 67 indikatörü bir kez hesapla
@@ -81,9 +81,9 @@ Açık paper trade'ler için:
       - Sinyal varsa: ileriye doğru TP/SL simülasyonu (trailing stop dahil)
       - Max 100 mum hold, sonra TIME_EXPIRED
    d. Rejim-spesifik win rate hesapla (trending/ranging/volatile)
-   e. Composite score hesapla
+   e. Composite score hesapla (custom_weights + adaptif TP/SL ile)
 4. Her coin için varyantları sırala (rank=1 en iyi)
-5. coin_config'a en iyi stratejiyi ata
+5. coin_config'a en iyi stratejiyi ata (genel + rejim-spesifik: trending/ranging/volatile)
 6. Sembol arası korelasyon matrisi hesapla
 ```
 
@@ -152,9 +152,9 @@ if backtest_win_rate == 0:
 ```
 
 ### Etiketler
-- **YUKSEK** (≥75): Güçlü sinyal → auto paper trade
-- **ORTA** (≥50): Orta güçte sinyal → auto paper trade
-- **DUSUK** (<50): Zayıf sinyal → sadece kaydet, trade açma
+- **YUKSEK** (≥75): Güçlü sinyal → auto paper trade (tam boyut)
+- **ORTA** (≥50): Orta güçte sinyal → auto paper trade (tam boyut)
+- **DUSUK** (<50): Zayıf sinyal → auto paper trade (%50 boyut, daha hızlı öğrenme)
 
 ---
 
@@ -163,9 +163,9 @@ if backtest_win_rate == 0:
 Aynı coin için tekrarlayan sinyal üretimini önler:
 
 1. **Açık trade varsa**: Aynı coin+bias için OPEN paper trade varsa → skip
-2. **Aynı sinyal**: Son sinyal aynı bias ve fiyat <%3 değiştiyse → skip
+2. **Aynı sinyal**: Son sinyal aynı bias ve fiyat <%1.5 değiştiyse → skip
 3. **Bias flip**: LONG→SHORT veya SHORT→LONG → her zaman izin ver
-4. **Fiyat hareketi**: Aynı bias ama fiyat >%3 değiştiyse → yeni sinyal izin ver
+4. **Fiyat hareketi**: Aynı bias ama fiyat >%1.5 değiştiyse → yeni sinyal izin ver
 
 ---
 
@@ -173,17 +173,17 @@ Aynı coin için tekrarlayan sinyal üretimini önler:
 
 ### Pozisyon Açma
 - **Portföy-bilinçli boyutlandırma**: `calculate_position_size()` ile dinamik
-- **Fallback**: CoinConfig.max_position_size veya $1000 varsayılan
+- **Fallback**: CoinConfig.max_position_size veya $200 varsayılan (learning mode)
 - **Kaldıraç**: CoinConfig'den (varsayılan 5x)
 - **İzole marjin** modeli (her pozisyon bağımsız likidasyon)
 
 ### Kontroller (6 katman)
 1. Portföy kapasitesi (`can_open_trade()`)
 2. Coin başına limit (max 1 açık trade)
-3. Toplam limit (max 20 açık trade)
+3. Toplam limit (max 150 açık trade)
 4. Günlük drawdown limiti (coin bazlı, varsayılan -%10)
 5. Korelasyon kontrolü (açık trade'lerle > 0.95 ise reddet)
-6. Güven skoru (ORTA veya YUKSEK gerekli)
+6. Güven skoru (YUKSEK/ORTA tam boyut, DUSUK %50 boyut)
 
 ### Multi-TP Sistemi
 ```
@@ -232,14 +232,15 @@ Trade kapandığında `strategy_performance` tablosunda paper_total, paper_wins,
 ### Seçim:
 - Her kategori için en güçlü 5 aday seçilir
 - Ağırlıklı ortalama hesaplanır
-- R:R oranı ≥ 1.8 zorunlu, yoksa sinyal iptal
+- R:R oranı ≥ 1.2 zorunlu, yoksa sinyal iptal
 
-### Multi-TP:
+### Multi-TP (Adaptif):
 ```python
-calculate_multi_tp(entry, atr, bias)
-# TP1: entry ± 1.5×ATR (ilk hedef, partial close)
-# TP2: entry ± 2.5×ATR (ana hedef)
-# TP3: entry ± 4.0×ATR (uzak hedef, trailing)
+calculate_multi_tp(entry, atr, bias, tp_atr_mult=2.5)
+# TP1: entry ± tp_atr_mult*0.48×ATR (varsayılan 1.2, ilk hedef, partial close)
+# TP2: entry ± tp_atr_mult×ATR (varsayılan 2.5, ana hedef)
+# TP3: entry ± tp_atr_mult*1.6×ATR (varsayılan 4.0, uzak hedef, trailing)
+# tp_atr_mult strateji varyantına göre adaptif (genetik evrimle optimize)
 ```
 
 ---
@@ -259,6 +260,9 @@ Top 10 coin × 50 varyant × 500 bar. ~12 dk'da ilk sıralama oluşturur. Sistem
 En iyi 10 varyantın componentlerini karıştırarak 10 "çocuk" üretir:
 - Baba'nın trend'i + Anne'nin entry'si + rastgele volume
 - %20 mutasyon şansı: bir kategorideki indikatörler tamamen değiştirilir
+- **Ağırlık evrimi**: Ebeveyn custom_weights'leri blend (uniform + %10 gürültü + %15 mutasyon)
+- **TP/SL evrimi**: Ebeveyn tp_atr_mult/sl_atr_mult blend + %10 agresif mutasyon
+- Clamp: TP [1.5, 4.0], SL [1.0, 3.0], ağırlıklar [0.1, 3.0]
 
 ### Zamanla Evrim:
 1. **İlk dakikalar**: Bootstrap → veri topla → quick optimize → ilk sinyaller
@@ -274,7 +278,9 @@ Bu sistemin en önemli özelliği: **her coin kendi en iyi stratejisini bulur**.
 
 BTC için EMA Ribbon + RSI iyi çalışabilir ama SOL için MACD + Stochastic daha iyi olabilir. Optimizer her coin için ayrı backtest yapıp ayrı sıralama üretir. `coin_config` tablosu her coin'in kendi `best_strategy_id`'sini tutar.
 
-Ayrıca **rejim-spesifik** strateji seçimi var: Piyasa trending ise trending'te en iyi stratejiyi, volatile ise volatile'da en iyi stratejiyi seçer.
+Ayrıca **rejim-spesifik** strateji seçimi var: `coin_config` tablosunda 3 ek FK (`best_trending_strategy_id`, `best_ranging_strategy_id`, `best_volatile_strategy_id`) tutar. Analyzer mevcut rejimi tespit edip `CoinConfig` lookup ile doğrudan o rejimin en iyi stratejisini seçer. None ise genel `best_strategy_id`'ye fallback yapar.
+
+Her strateji varyantı artık kendi **custom_weights** (indikatör ağırlıkları), **tp_atr_mult** (TP çarpanı), ve **sl_atr_mult** (SL çarpanı) parametrelerini taşır. Genetik algoritma bu parametreleri de evrimleştirir.
 
 ---
 
@@ -378,6 +384,10 @@ Binance API (ccxt.binanceusdm, 15s timeout)
 - ✅ Korelasyon-bazlı trade filtreleme
 - ✅ Rejim-spesifik strateji seçimi
 - ✅ Otomatik migration sistemi (ADD COLUMN IF NOT EXISTS)
+- ✅ Custom indicator weights per variant (genetik evrimle optimize)
+- ✅ Adaptif TP/SL ATR çarpanları (varyant bazlı, genetik evrimle optimize)
+- ✅ Rejim-bazlı CoinConfig FK'leri (trending/ranging/volatile best strategy)
+- ✅ Sinyal filtrelerini gevşetme (bias 1.5, dedup 1.5%, R:R 1.2, DUSUK trade)
 
 ### Henüz Yapılmayanlar
 - [ ] Manuel trade kapatma (UI'dan)
