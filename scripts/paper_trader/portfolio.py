@@ -235,8 +235,31 @@ def record_portfolio_snapshot():
         session.close()
 
 
+def _compute_unrealized_pnl(session) -> float:
+    """Compute total unrealized P&L from latest TradeSnapshot per open trade."""
+    open_trades = session.query(PaperTrade).filter_by(status="OPEN").all()
+    if not open_trades:
+        return 0.0
+
+    unrealized = 0.0
+    for t in open_trades:
+        latest_snap = (
+            session.query(TradeSnapshot)
+            .filter_by(paper_trade_id=t.id)
+            .order_by(TradeSnapshot.timestamp.desc())
+            .first()
+        )
+        if latest_snap:
+            unrealized += latest_snap.unrealized_pnl
+        elif t.max_profit and t.position_size_usd:
+            # Fallback: approximate from max_profit percentage
+            unrealized += t.max_profit * t.position_size_usd / 100
+
+    return unrealized
+
+
 def get_portfolio_summary() -> dict:
-    """Dashboard-friendly portfolio summary."""
+    """Dashboard-friendly portfolio summary (includes unrealized P&L)."""
     equity = get_portfolio_equity()
     cash = get_cash_balance()
 
@@ -261,11 +284,18 @@ def get_portfolio_summary() -> dict:
             .scalar()
         ) or 0.0
 
-        total_pnl = equity - INITIAL_CAPITAL
+        # Unrealized P&L from open positions
+        unrealized_pnl = _compute_unrealized_pnl(session)
+
+        # True portfolio value = equity (realized) + unrealized
+        total_equity = equity + unrealized_pnl
+        total_pnl = total_equity - INITIAL_CAPITAL
         total_pnl_pct = (total_pnl / INITIAL_CAPITAL * 100) if INITIAL_CAPITAL > 0 else 0
 
         return {
-            "equity": round(equity, 2),
+            "equity": round(total_equity, 2),
+            "realized_equity": round(equity, 2),
+            "unrealized_pnl": round(unrealized_pnl, 2),
             "cash": round(cash, 2),
             "open_positions": open_count,
             "exposure_pct": round(exposure_pct, 1),

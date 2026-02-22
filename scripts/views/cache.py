@@ -41,7 +41,8 @@ def get_portfolio_summary_cached() -> dict:
     except Exception as e:
         logger.warning(f"Portfolio summary error: {e}")
         return {
-            "equity": 0, "cash": 0, "open_positions": 0,
+            "equity": 0, "realized_equity": 0, "unrealized_pnl": 0,
+            "cash": 0, "open_positions": 0,
             "exposure_pct": 0, "daily_pnl": 0, "total_pnl": 0,
             "total_pnl_pct": 0, "initial_capital": 100_000,
         }

@@ -95,13 +95,14 @@ def _fragment_portfolio():
     """Portfolio metrics — 30s auto-refresh."""
     try:
         ps = get_portfolio_summary_cached()
-        c1, c2, c3, c4, c5 = st.columns(5)
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
         c1.metric("Portfolio Degeri", f"${ps['equity']:,.2f}",
                    delta=f"{ps['total_pnl_pct']:+.1f}%")
-        c2.metric("Nakit", f"${ps['cash']:,.2f}")
-        c3.metric("Exposure", f"{ps['exposure_pct']:.1f}%")
-        c4.metric("Gunluk P&L", f"${ps['daily_pnl']:+,.2f}")
-        c5.metric("Acik Pozisyon", ps['open_positions'])
+        c2.metric("Unrealized P&L", f"${ps.get('unrealized_pnl', 0):+,.2f}")
+        c3.metric("Nakit", f"${ps['cash']:,.2f}")
+        c4.metric("Exposure", f"{ps['exposure_pct']:.1f}%")
+        c5.metric("Gunluk P&L", f"${ps['daily_pnl']:+,.2f}")
+        c6.metric("Acik Pozisyon", ps['open_positions'])
     except Exception:
         pass
 
