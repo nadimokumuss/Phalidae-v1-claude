@@ -20,9 +20,9 @@ class OHLCVData(Base):
     __tablename__ = "ohlcv_data"
 
     id = Column(Integer, primary_key=True)
-    symbol = Column(String(30), nullable=False, index=True)
-    timeframe = Column(String(5), nullable=False, index=True)
-    timestamp = Column(DateTime, nullable=False, index=True)
+    symbol = Column(String(30), nullable=False)
+    timeframe = Column(String(5), nullable=False)
+    timestamp = Column(DateTime, nullable=False)
     open = Column(Float, nullable=False)
     high = Column(Float, nullable=False)
     low = Column(Float, nullable=False)

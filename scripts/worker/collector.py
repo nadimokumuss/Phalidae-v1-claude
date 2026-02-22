@@ -652,3 +652,76 @@ def deep_backfill_job():
     except Exception as e:
         logger.error(f"Deep backfill daily error: {e}")
         _finish_agent_job(job_id, "FAILED", total_new, error=str(e))
+
+
+# ── Data Retention ─────────────────────────────────────────────────
+
+# Retention rules: how many days to keep per timeframe
+DATA_RETENTION_DAYS = {
+    "5m": 3,
+    "15m": 7,
+    "30m": 14,
+    "1h": 30,
+    # 4h and 1d: keep forever (needed for backtesting)
+}
+
+
+def run_data_retention():
+    """Delete old OHLCV data per timeframe retention rules. Also cleans secondary tables."""
+    job_id = _start_agent_job("data_retention")
+    total_deleted = 0
+    try:
+        session = get_session()
+        try:
+            now = datetime.utcnow()
+            details = {}
+
+            # Prune OHLCV by timeframe
+            for tf, days in DATA_RETENTION_DAYS.items():
+                cutoff = now - timedelta(days=days)
+                deleted = session.query(OHLCVData).filter(
+                    OHLCVData.timeframe == tf,
+                    OHLCVData.timestamp < cutoff
+                ).delete(synchronize_session=False)
+                if deleted:
+                    details[f"ohlcv_{tf}"] = deleted
+                    total_deleted += deleted
+
+            # Prune old agent_jobs (keep 7 days)
+            deleted = session.query(AgentJob).filter(
+                AgentJob.started_at < now - timedelta(days=7)
+            ).delete(synchronize_session=False)
+            if deleted:
+                details["agent_jobs"] = deleted
+                total_deleted += deleted
+
+            # Prune old trade_snapshots (keep 30 days)
+            from db.models import TradeSnapshot
+            deleted = session.query(TradeSnapshot).filter(
+                TradeSnapshot.timestamp < now - timedelta(days=30)
+            ).delete(synchronize_session=False)
+            if deleted:
+                details["trade_snapshots"] = deleted
+                total_deleted += deleted
+
+            # Prune old news_events (keep 14 days)
+            from db.models import NewsEvent
+            deleted = session.query(NewsEvent).filter(
+                NewsEvent.published_at < now - timedelta(days=14)
+            ).delete(synchronize_session=False)
+            if deleted:
+                details["news_events"] = deleted
+                total_deleted += deleted
+
+            session.commit()
+            logger.info(f"Data retention: deleted {total_deleted} rows: {details}")
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+        _finish_agent_job(job_id, "SUCCESS", total_deleted, context=details)
+    except Exception as e:
+        logger.error(f"Data retention error: {e}")
+        _finish_agent_job(job_id, "FAILED", total_deleted, error=str(e))

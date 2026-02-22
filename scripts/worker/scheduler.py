@@ -103,6 +103,14 @@ def _job_portfolio_snapshot():
         logger.error(f"Portfolio snapshot job error: {e}")
 
 
+def _job_data_retention():
+    from worker.collector import run_data_retention
+    try:
+        run_data_retention()
+    except Exception as e:
+        logger.error(f"Data retention job error: {e}")
+
+
 def _job_backfill_underfilled():
     """Backfill symbols with insufficient data. Runs as separate job to not block bootstrap."""
     from worker.collector import _start_agent_job, _finish_agent_job, backfill_symbol
@@ -340,6 +348,16 @@ def start_scheduler():
         next_run_time=now + timedelta(minutes=1),
     )
 
+    # Data Retention - daily at 03:00 UTC (after deep backfill)
+    _scheduler.add_job(
+        _job_data_retention,
+        trigger=CronTrigger(hour=3, minute=0),
+        id="data_retention",
+        name="Data Retention Cleanup",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     # Run bootstrap as a one-time job (runs immediately in background thread)
     _scheduler.add_job(
         _bootstrap,
@@ -363,7 +381,7 @@ def start_scheduler():
 
     _scheduler.start()
     _started = True
-    logger.info("Scheduler started with 12 jobs (bootstrap + backfill + 10 recurring)")
+    logger.info("Scheduler started with 13 jobs (bootstrap + backfill + 11 recurring)")
     return _scheduler
 
 
