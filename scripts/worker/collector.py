@@ -504,7 +504,7 @@ def collect_regime_data():
                     session.commit()
                     saved += 1
             except Exception as e:
-                logger.debug(f"Regime save error for {sym}: {e}")
+                logger.warning(f"Regime save error for {sym}: {e}")
                 session.rollback()
             finally:
                 session.close()

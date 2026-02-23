@@ -326,6 +326,7 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
     # Detect current regime
     regime_details = get_regime_details(df)
     current_regime = regime_details["regime"]
+    ema_slope = regime_details.get("ema_slope", 0)
 
     # Try regime-specific strategy first, fallback to general best
     best_variant = variant
@@ -339,6 +340,8 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
             selected_variant_id = regime_variant.id
     finally:
         session.close()
+
+    logger.info(f"Strategy: {symbol} variant_id={selected_variant_id} regime={current_regime}")
 
     # Strategy-specific scores for optimizer learning (tracked separately)
     composition = best_variant.composition if best_variant else {}
@@ -581,20 +584,34 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
     if config.auto_trade and confidence in ("YUKSEK", "ORTA"):
         # Regime filter: block HIGH_VOLATILITY entirely
         if current_regime == "HIGH_VOLATILITY":
-            logger.info(f"Regime filter: {symbol} skipped — HIGH_VOLATILITY regime, no trade")
+            logger.info(f"Regime filter: {symbol} skipped — HIGH_VOLATILITY regime, no trade variant_id={selected_variant_id}")
         # Regime filter: TRENDING_UP and BREAKOUT require YUKSEK confidence
         elif current_regime in ("TRENDING_UP", "BREAKOUT") and confidence != "YUKSEK":
-            logger.info(f"Regime filter: {symbol} skipped — {current_regime} requires YUKSEK (got {confidence})")
+            logger.info(f"Regime filter: {symbol} skipped — {current_regime} requires YUKSEK (got {confidence}) variant_id={selected_variant_id}")
+        # Regime filter: block LONG in TRENDING_DOWN
+        elif current_regime == "TRENDING_DOWN" and bias == "LONG":
+            logger.info(f"Regime filter: {symbol} LONG blocked — TRENDING_DOWN regime variant_id={selected_variant_id}")
+        # EMA slope guard: block LONG when slope is strongly negative (hidden downtrend)
+        elif bias == "LONG" and ema_slope < -0.003:
+            logger.info(f"EMA guard: {symbol} LONG blocked — negative slope ({ema_slope:.4f}) variant_id={selected_variant_id}")
         else:
-            # Position size adjustments
+            # Position size adjustments (clamp base to MAX_POSITION_SIZE_USD to prevent bypass)
+            from paper_trader.portfolio import MAX_POSITION_SIZE_USD
             position_size_override = None
             if news_risk > 0.7:
-                position_size_override = (config.max_position_size or 200.0) * 0.5
+                base_size = min(config.max_position_size or 200.0, MAX_POSITION_SIZE_USD)
+                position_size_override = base_size * 0.5
                 logger.info(f"News risk {news_risk:.2f}: halving position size for {symbol}")
 
             # ORTA confidence: 70% position size
             if confidence == "ORTA" and position_size_override is None:
-                position_size_override = (config.max_position_size or 200.0) * 0.7
+                base_size = min(config.max_position_size or 200.0, MAX_POSITION_SIZE_USD)
+                position_size_override = base_size * 0.7
+
+            # RANGING + LONG: reduce position size by 50%
+            if current_regime == "RANGING" and bias == "LONG" and position_size_override is None:
+                base_size = min(config.max_position_size or 200.0, MAX_POSITION_SIZE_USD)
+                position_size_override = base_size * 0.5
 
             open_paper_trade(
                 signal_id=signal_id,

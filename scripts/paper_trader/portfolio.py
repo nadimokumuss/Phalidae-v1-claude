@@ -17,10 +17,10 @@ logger = logging.getLogger("phalidae.portfolio")
 INITIAL_CAPITAL = 100_000.0
 MAX_RISK_PER_TRADE_PCT = 0.5           # Reduced: smaller risk per trade
 MAX_TOTAL_EXPOSURE_PCT = 80.0          # Reduced: lower total exposure
-MAX_POSITION_SIZE_USD = 400.0          # Reduced: hard cap per trade
+MAX_POSITION_SIZE_USD = 300.0          # Reduced: smaller position = smaller loss
 MAX_OPEN_POSITIONS = 150               # ~120-150 active coins = theoretical max
 MAX_DAILY_LOSS_PCT = 10.0              # Reduced: stricter daily loss limit
-MAX_LOSS_PER_TRADE_USD = 300.0         # New: absolute max loss per trade in USD
+MAX_LOSS_PER_TRADE_USD = 150.0         # Reduced: must be below avg TP ($163)
 
 
 def get_portfolio_equity() -> float:
