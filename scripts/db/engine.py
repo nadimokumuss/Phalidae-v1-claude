@@ -68,6 +68,7 @@ def create_all():
     from db.models import Base
     Base.metadata.create_all(get_engine())
     _run_migrations()
+    _migrate_open_trade_tp_levels()
 
 
 def _run_migrations():
@@ -138,3 +139,114 @@ def _run_migrations():
                 logger.warning(f"Migration skip {table}.{column}: {e}")
         conn.commit()
     logger.info(f"Migrations applied: {len(needed)} columns")
+
+
+def _migrate_open_trade_tp_levels():
+    """One-time migration: recalculate TP levels for open trades using new multipliers.
+    tp_atr_mult: 3.0 → 2.0, TP1 ratio: 0.48 → 0.6, TP3 ratio: 1.6 → 1.4.
+    Post-TP1 SL: breakeven → entry + 0.25×ATR.
+    Idempotent: marks migrated trades via management log to avoid re-running."""
+    import logging
+    logger = logging.getLogger("phalidae.migrations")
+
+    session = get_session()
+    try:
+        from db.models import PaperTrade, TradeManagementLog
+        from sqlalchemy import and_
+
+        # Check if migration already ran (look for marker log entry)
+        marker = (
+            session.query(TradeManagementLog)
+            .filter_by(event_type="TP_MIGRATION_V2")
+            .first()
+        )
+        if marker:
+            return  # Already migrated
+
+        open_trades = session.query(PaperTrade).filter_by(status="OPEN").all()
+        if not open_trades:
+            return
+
+        logger.info(f"Migrating TP levels for {len(open_trades)} open trades...")
+
+        # Import ATR calculation
+        try:
+            from worker.collector import get_ohlcv_df
+            from indicators import compute_all_indicators
+        except ImportError:
+            logger.warning("Cannot import indicators for TP migration, skipping")
+            return
+
+        import pandas as pd
+        from datetime import datetime
+
+        NEW_TP_MULT = 2.0
+        NEW_TP1_RATIO = 0.6
+        NEW_TP3_RATIO = 1.4
+
+        migrated = 0
+        for t in open_trades:
+            try:
+                # Get current ATR for this symbol
+                df = get_ohlcv_df(t.symbol, "4h", limit=50)
+                if df.empty or len(df) < 20:
+                    continue
+                df = compute_all_indicators(df)
+                atr = float(df["atr"].iloc[-1]) if "atr" in df.columns and pd.notna(df["atr"].iloc[-1]) else 0.0
+                if atr <= 0:
+                    continue
+
+                entry = float(t.entry_price)
+                tp_mult = NEW_TP_MULT
+                tp1_ratio = tp_mult * NEW_TP1_RATIO
+                tp2_ratio = tp_mult
+                tp3_ratio = tp_mult * NEW_TP3_RATIO
+
+                if t.bias == "LONG":
+                    new_tp1 = round(entry + tp1_ratio * atr, 6)
+                    new_tp2 = round(entry + tp2_ratio * atr, 6)
+                    new_tp3 = round(entry + tp3_ratio * atr, 6)
+                else:
+                    new_tp1 = round(entry - tp1_ratio * atr, 6)
+                    new_tp2 = round(entry - tp2_ratio * atr, 6)
+                    new_tp3 = round(entry - tp3_ratio * atr, 6)
+
+                # Update TP levels
+                t.partial_tp_price = new_tp1
+                t.tp_price = new_tp2
+                t.tp2_price = new_tp2
+                t.tp3_price = new_tp3
+
+                # If partial TP already taken, update SL to entry + 0.25×ATR
+                if t.partial_tp_taken:
+                    if t.bias == "LONG":
+                        new_sl = round(entry + 0.25 * atr, 6)
+                    else:
+                        new_sl = round(entry - 0.25 * atr, 6)
+                    t.sl_price = new_sl
+                    t.trailing_stop_price = new_sl
+
+                migrated += 1
+            except Exception as e:
+                logger.warning(f"TP migration skip #{t.id} ({t.symbol}): {e}")
+
+        # Add marker to prevent re-running
+        if migrated > 0:
+            session.add(TradeManagementLog(
+                paper_trade_id=open_trades[0].id,
+                timestamp=datetime.utcnow(),
+                event_type="TP_MIGRATION_V2",
+                old_value=3.0,
+                new_value=2.0,
+                reason=f"Migrated {migrated} trades: tp_mult=2.0",
+                current_price=0,
+                current_pnl_pct=0,
+            ))
+
+        session.commit()
+        logger.info(f"TP migration complete: {migrated}/{len(open_trades)} trades updated")
+    except Exception as e:
+        session.rollback()
+        logger.error(f"TP migration error: {e}")
+    finally:
+        session.close()
