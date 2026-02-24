@@ -171,8 +171,8 @@ These files are protected by a pre-commit hook (see [Hooks](#hooks) section). An
 | Initial capital | 100,000 USD (learning mode) | portfolio.py |
 | Max risk per trade | 0.5% | portfolio.py |
 | Max total exposure | 80% | portfolio.py |
-| Max position size | $400 | portfolio.py |
-| Max loss per trade | $300 | portfolio.py |
+| Max position size | $300 | portfolio.py |
+| Max loss per trade | $150 | portfolio.py |
 | Max daily loss | 10% | portfolio.py |
 | Confidence: YUKSEK | >= 75/100 | analyzer.py |
 | Confidence: ORTA | >= 50/100 | analyzer.py |

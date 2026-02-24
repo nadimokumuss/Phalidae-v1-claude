@@ -128,19 +128,20 @@ def _simulate_trade(
             max_favorable = max(max_favorable, bar_best_pct)
             max_adverse = min(max_adverse, bar_worst_pct)
 
-            # 3-tier trailing stop (matches live trader in analyzer.py)
-            # 1.0xATR profit -> SL = entry (breakeven)
-            # 1.5xATR profit -> SL = entry + 0.5xATR (profit lock)
-            # 2.0xATR profit -> trail 1xATR behind price
+            # 3-tier trailing stop (aligned with live trader in analyzer.py)
+            # 0.75xATR profit -> SL = entry + 0.25xATR (profit buffer)
+            # 1.2xATR profit  -> SL = entry + 0.5xATR (profit lock)
+            # 1.5xATR profit  -> trail 0.75xATR behind price
             current_profit = (high - entry_price)
-            if current_profit >= 2 * atr:
-                new_trail = high - atr
+            if current_profit >= 1.5 * atr:
+                new_trail = high - 0.75 * atr
                 trailing_sl = max(trailing_sl, new_trail)
-            elif current_profit >= 1.5 * atr:
+            elif current_profit >= 1.2 * atr:
                 target = entry_price + 0.5 * atr
                 trailing_sl = max(trailing_sl, target)
-            elif current_profit >= 1.0 * atr:
-                trailing_sl = max(trailing_sl, entry_price)
+            elif current_profit >= 0.75 * atr:
+                target = entry_price + 0.25 * atr
+                trailing_sl = max(trailing_sl, target)
 
             if high >= tp_price:
                 pnl_pct = ((tp_price - entry_price) / entry_price) * DEFAULT_LEVERAGE * 100 - fee_cost_pct
@@ -156,19 +157,20 @@ def _simulate_trade(
             max_favorable = max(max_favorable, bar_best_pct)
             max_adverse = min(max_adverse, bar_worst_pct)
 
-            # 3-tier trailing stop (matches live trader in analyzer.py)
-            # 1.0xATR profit -> SL = entry (breakeven)
-            # 1.5xATR profit -> SL = entry - 0.5xATR (profit lock)
-            # 2.0xATR profit -> trail 1xATR behind price
+            # 3-tier trailing stop (aligned with live trader in analyzer.py)
+            # 0.75xATR profit -> SL = entry - 0.25xATR (profit buffer)
+            # 1.2xATR profit  -> SL = entry - 0.5xATR (profit lock)
+            # 1.5xATR profit  -> trail 0.75xATR behind price
             current_profit = (entry_price - low)
-            if current_profit >= 2 * atr:
-                new_trail = low + atr
+            if current_profit >= 1.5 * atr:
+                new_trail = low + 0.75 * atr
                 trailing_sl = min(trailing_sl, new_trail)
-            elif current_profit >= 1.5 * atr:
+            elif current_profit >= 1.2 * atr:
                 target = entry_price - 0.5 * atr
                 trailing_sl = min(trailing_sl, target)
-            elif current_profit >= 1.0 * atr:
-                trailing_sl = min(trailing_sl, entry_price)
+            elif current_profit >= 0.75 * atr:
+                target = entry_price - 0.25 * atr
+                trailing_sl = min(trailing_sl, target)
 
             if low <= tp_price:
                 pnl_pct = ((entry_price - tp_price) / entry_price) * DEFAULT_LEVERAGE * 100 - fee_cost_pct

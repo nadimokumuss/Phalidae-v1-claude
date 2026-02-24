@@ -361,7 +361,7 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
     entry_price = df["close"].iloc[-1]
 
     # Variant'ın TP/SL çarpanlarını al
-    variant_tp_mult = best_variant.tp_atr_mult if best_variant and best_variant.tp_atr_mult else 3.0
+    variant_tp_mult = best_variant.tp_atr_mult if best_variant and best_variant.tp_atr_mult else 2.0
     variant_sl_mult = best_variant.sl_atr_mult if best_variant and best_variant.sl_atr_mult else 1.25
 
     from signal_generator import calculate_optimal_tp_sl
@@ -388,8 +388,9 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
     # Confidence scoring (Phase 5)
     from signal_generator import calculate_confidence_score, estimate_time_to_target
 
-    # Get backtest win rate for this strategy (prefer regime-specific WR)
+    # Get backtest win rates: overall + regime-specific (kept separate to avoid double-counting)
     backtest_wr = 0.0
+    regime_specific_wr = 0.0
     if selected_variant_id:
         session = get_session()
         try:
@@ -400,14 +401,13 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
             )
             if perf:
                 backtest_wr = perf.win_rate or 0.0
-                # Regime-specific WR: use if higher than general WR
+                # Regime-specific WR: separate variable for regime_fit component
                 if current_regime in ("TRENDING_UP", "TRENDING_DOWN"):
-                    regime_wr = perf.regime_trending_score or 0.0
+                    regime_specific_wr = perf.regime_trending_score or 0.0
                 elif current_regime in ("HIGH_VOLATILITY", "BREAKOUT"):
-                    regime_wr = perf.regime_volatile_score or 0.0
+                    regime_specific_wr = perf.regime_volatile_score or 0.0
                 else:
-                    regime_wr = perf.regime_ranging_score or 0.0
-                backtest_wr = max(backtest_wr, regime_wr)
+                    regime_specific_wr = perf.regime_ranging_score or 0.0
         finally:
             session.close()
 
@@ -435,12 +435,13 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
         news_risk=news_risk,
         backtest_win_rate=backtest_wr,
         volume_confirmation=vol_confirmed,
+        regime_win_rate=regime_specific_wr,
     )
 
     # If backtest data is missing, redistribute those points proportionally
     # Without backtest: regime_fit(20) + backtest_history(10) = 30 points unavailable
     # Scale the available 70 points to 100
-    if backtest_wr == 0:
+    if backtest_wr == 0 and regime_specific_wr == 0:
         available_max = 25 + 15 + 10 + 10 + 10  # confluence + rr + patterns + volume + news = 70
         if available_max > 0:
             conf_score = round(conf_score / available_max * 100, 1)
@@ -591,27 +592,36 @@ def _analyze_single(config: CoinConfig, variant: StrategyVariant | None) -> bool
         # Regime filter: block LONG in TRENDING_DOWN
         elif current_regime == "TRENDING_DOWN" and bias == "LONG":
             logger.info(f"Regime filter: {symbol} LONG blocked — TRENDING_DOWN regime variant_id={selected_variant_id}")
+        # Regime filter: block SHORT in TRENDING_UP
+        elif current_regime == "TRENDING_UP" and bias == "SHORT":
+            logger.info(f"Regime filter: {symbol} SHORT blocked — TRENDING_UP regime variant_id={selected_variant_id}")
         # EMA slope guard: block LONG when slope is strongly negative (hidden downtrend)
         elif bias == "LONG" and ema_slope < -0.003:
             logger.info(f"EMA guard: {symbol} LONG blocked — negative slope ({ema_slope:.4f}) variant_id={selected_variant_id}")
+        # EMA slope guard: block SHORT when slope is strongly positive (hidden uptrend)
+        elif bias == "SHORT" and ema_slope > 0.003:
+            logger.info(f"EMA guard: {symbol} SHORT blocked — positive slope ({ema_slope:.4f}) variant_id={selected_variant_id}")
         else:
-            # Position size adjustments (clamp base to MAX_POSITION_SIZE_USD to prevent bypass)
+            # Position size adjustments — stack with min() so most restrictive wins
             from paper_trader.portfolio import MAX_POSITION_SIZE_USD
+            base_size = min(config.max_position_size or 200.0, MAX_POSITION_SIZE_USD)
             position_size_override = None
+
             if news_risk > 0.7:
-                base_size = min(config.max_position_size or 200.0, MAX_POSITION_SIZE_USD)
                 position_size_override = base_size * 0.5
                 logger.info(f"News risk {news_risk:.2f}: halving position size for {symbol}")
 
             # ORTA confidence: 70% position size
-            if confidence == "ORTA" and position_size_override is None:
-                base_size = min(config.max_position_size or 200.0, MAX_POSITION_SIZE_USD)
-                position_size_override = base_size * 0.7
+            if confidence == "ORTA":
+                new_size = base_size * 0.7
+                if position_size_override is None or new_size < position_size_override:
+                    position_size_override = new_size
 
             # RANGING + LONG: reduce position size by 50%
-            if current_regime == "RANGING" and bias == "LONG" and position_size_override is None:
-                base_size = min(config.max_position_size or 200.0, MAX_POSITION_SIZE_USD)
-                position_size_override = base_size * 0.5
+            if current_regime == "RANGING" and bias == "LONG":
+                new_size = base_size * 0.5
+                if position_size_override is None or new_size < position_size_override:
+                    position_size_override = new_size
 
             open_paper_trade(
                 signal_id=signal_id,
@@ -909,7 +919,7 @@ def check_open_trades():
                         continue
                     if trailing_sl and current_price <= trailing_sl:
                         status = "TRAILING_STOP" if trailing_sl > (trade["sl_price"] or 0) else "SL_HIT"
-                        close_paper_trade(trade["id"], current_price, status)
+                        close_paper_trade(trade["id"], trailing_sl, status)
                         checked += 1
                         continue
                     if trade["liquidation_price"] and current_price <= trade["liquidation_price"]:
@@ -923,7 +933,7 @@ def check_open_trades():
                         continue
                     if trailing_sl and current_price >= trailing_sl:
                         status = "TRAILING_STOP" if trailing_sl < (trade["sl_price"] or float('inf')) else "SL_HIT"
-                        close_paper_trade(trade["id"], current_price, status)
+                        close_paper_trade(trade["id"], trailing_sl, status)
                         checked += 1
                         continue
                     if trade["liquidation_price"] and current_price >= trade["liquidation_price"]:

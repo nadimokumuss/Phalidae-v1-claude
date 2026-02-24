@@ -111,7 +111,7 @@ def validate_max_loss(
 ) -> float:
     """
     Ensure that the worst-case loss (SL hit) does not exceed MAX_LOSS_PER_TRADE_USD.
-    If it would, shrink position_size until max loss = $300.
+    If it would, shrink position_size until max loss = $150.
     Returns adjusted position_size.
     """
     if entry <= 0 or sl <= 0:

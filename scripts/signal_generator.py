@@ -523,17 +523,18 @@ def calculate_confidence_score(
     news_risk: float = 0.0,
     backtest_win_rate: float = 0.0,
     volume_confirmation: float = 0.0,
+    regime_win_rate: float = 0.0,
 ) -> tuple[float, dict]:
     """
     0-100 confidence score with breakdown.
 
     Components (total 100):
     - Confluence (max 25): same-direction indicator count / total × 25
-    - Regime fit (max 20): backtest win rate in this regime × 20
+    - Regime fit (max 20): regime-specific win rate × 20
     - R:R quality (max 15): min(rr_ratio / 3, 1) × 15
     - Pattern support (max 10): min(pattern_count / 3, 1) × 10
     - Volume confirmation (max 10): volume_confirmation × 10
-    - Backtest history (max 10): backtest_win_rate × 10
+    - Backtest history (max 10): overall backtest_win_rate × 10
     - News risk (max 10): (1 - news_risk) × 10
     """
     # Confluence: how many indicators agree on direction
@@ -546,8 +547,8 @@ def calculate_confidence_score(
     else:
         confluence = 0
 
-    # Regime fit
-    regime_fit = backtest_win_rate * 20
+    # Regime fit: use regime-specific WR if available, else fall back to overall WR
+    regime_fit = (regime_win_rate if regime_win_rate > 0 else backtest_win_rate) * 20
 
     # R:R quality
     rr_quality = min(rr_ratio / 3.0, 1.0) * 15 if rr_ratio else 0
