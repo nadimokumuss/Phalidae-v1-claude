@@ -326,10 +326,10 @@ def start_scheduler():
         max_instances=1,
     )
 
-    # Phase 4: News Collector - every 15 minutes
+    # Phase 4: News Collector - every 30 minutes (reduced from 15 to avoid rate limits)
     _scheduler.add_job(
         _job_collect_news,
-        trigger=IntervalTrigger(minutes=15),
+        trigger=IntervalTrigger(minutes=30),
         id="news_collector",
         name="News Collector",
         replace_existing=True,

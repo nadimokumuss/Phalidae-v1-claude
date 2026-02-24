@@ -17,6 +17,10 @@ logger = logging.getLogger("phalidae.news")
 
 CRYPTOCOMPARE_URL = "https://min-api.cryptocompare.com/data/v2/news/"
 
+# Rate limit cooldown: skip calls if last attempt was rate-limited
+_rate_limit_until: datetime | None = None
+RATE_LIMIT_COOLDOWN_MINUTES = 30
+
 # Known crypto ticker symbols for filtering categories
 KNOWN_TICKERS = {
     "BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "AVAX", "DOT", "LINK",
@@ -28,7 +32,14 @@ KNOWN_TICKERS = {
 
 
 def collect_news():
-    """Fetch latest news from CryptoCompare. Called every 15 minutes."""
+    """Fetch latest news from CryptoCompare. Called every 30 minutes."""
+    global _rate_limit_until
+
+    # Skip if we're in cooldown from a recent rate limit hit
+    if _rate_limit_until and datetime.utcnow() < _rate_limit_until:
+        logger.debug(f"News collector: rate limit cooldown until {_rate_limit_until:%H:%M:%S} UTC, skipping")
+        return
+
     job_id = _start_agent_job("news_collector")
     collected = 0
 
@@ -54,8 +65,15 @@ def collect_news():
 
         if data.get("Type") != 100:
             msg = data.get("Message", "Unknown error")
+            # Rate limit hit — activate cooldown to avoid spamming
+            if "rate limit" in msg.lower():
+                _rate_limit_until = datetime.utcnow() + timedelta(minutes=RATE_LIMIT_COOLDOWN_MINUTES)
+                logger.warning(f"CryptoCompare rate limit hit, cooldown until {_rate_limit_until:%H:%M:%S} UTC")
             _finish_agent_job(job_id, "FAILED", 0, error=f"API error: {msg}")
             return
+
+        # Successful call — clear any cooldown
+        _rate_limit_until = None
 
         results = data.get("Data", [])
 
