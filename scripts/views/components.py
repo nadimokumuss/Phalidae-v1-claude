@@ -74,8 +74,8 @@ def render_top_bar():
 
 
 def render_watchlist(watchlist_data: list[dict], selected_symbol: str):
-    """Left panel watchlist with search filter and clickable rows.
-    Uses st.container with fixed height. Updates session state on click."""
+    """Left panel watchlist using a single selectbox for speed.
+    No per-symbol DB queries — just symbol names and trade indicators."""
 
     # Search filter
     search = st.text_input(
@@ -96,43 +96,64 @@ def render_watchlist(watchlist_data: list[dict], selected_symbol: str):
     without_trade = [w for w in filtered if not w.get("has_open_trade")]
     sorted_list = with_trade + without_trade
 
-    # Show first 40, "more" button for rest
-    show_limit = st.session_state.get("watchlist_show_limit", 40)
-    display_list = sorted_list[:show_limit]
+    if not sorted_list:
+        st.caption("Coin bulunamadi.")
+        return
 
-    container = st.container(height=520)
+    # Build display labels — lightweight, no DB calls
+    sym_list = [w.get("symbol", "") for w in sorted_list]
+    labels = []
+    for w in sorted_list:
+        clean = w.get("symbol", "").replace("/USDT:USDT", "")
+        trade_mark = " *" if w.get("has_open_trade") else ""
+        labels.append(f"{clean}{trade_mark}")
+
+    # Find current selected index
+    try:
+        current_idx = sym_list.index(selected_symbol)
+    except ValueError:
+        current_idx = 0
+
+    sel_idx = st.selectbox(
+        "Coin",
+        range(len(sym_list)),
+        index=current_idx,
+        format_func=lambda i: labels[i],
+        label_visibility="collapsed",
+        key="watchlist_select",
+    )
+
+    new_sym = sym_list[sel_idx]
+    if new_sym != st.session_state.get("selected_symbol"):
+        st.session_state["selected_symbol"] = new_sym
+        st.rerun()
+
+    # Show compact list below selectbox (just text, no widgets)
+    container = st.container(height=470)
     with container:
-        for w in display_list:
-            sym = w.get("symbol", "")
-            clean = sym.replace("/USDT:USDT", "")
+        # Show top 30 as simple text
+        for i, w in enumerate(sorted_list[:30]):
+            clean = w.get("symbol", "").replace("/USDT:USDT", "")
             regime = w.get("regime", "")
-            pnl = w.get("unrealized_pnl_pct")
             has_trade = w.get("has_open_trade", False)
-            is_selected = sym == selected_symbol
+            is_sel = w.get("symbol", "") == new_sym
 
-            # Regime dot color
             r_color = REGIME_COLORS.get(regime, TEXT_MUTED)
+            bg = BG_TERTIARY if is_sel else "transparent"
+            weight = "600" if is_sel else "400"
+            trade_dot = f' <span style="color:{ACCENT_YELLOW};">●</span>' if has_trade else ""
 
-            # Build label
-            label_parts = [clean]
-            if has_trade and pnl is not None:
-                label_parts.append(f"  {pnl:+.1f}%")
+            st.markdown(
+                f'<div style="padding:2px 6px;background:{bg};font-size:12px;'
+                f'color:{TEXT_PRIMARY};font-weight:{weight};border-left:'
+                f'{"3px solid " + ACCENT_BLUE if is_sel else "3px solid transparent"};">'
+                f'<span style="color:{r_color};font-size:8px;">●</span> {clean}{trade_dot}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
-            btn_label = " ".join(label_parts)
-
-            if st.button(
-                btn_label,
-                key=f"wl_{sym}",
-                use_container_width=True,
-                type="primary" if is_selected else "secondary",
-            ):
-                st.session_state["selected_symbol"] = sym
-                st.rerun()
-
-        if len(sorted_list) > show_limit:
-            if st.button(f"Daha fazla ({len(sorted_list) - show_limit})", key="wl_more"):
-                st.session_state["watchlist_show_limit"] = show_limit + 40
-                st.rerun()
+        if len(sorted_list) > 30:
+            st.caption(f"+{len(sorted_list) - 30} daha (arama ile bulun)")
 
 
 def render_bottom_panel_trades(trades: list[dict], mode: str = "open"):

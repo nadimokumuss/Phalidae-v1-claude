@@ -52,16 +52,12 @@ def render():
 
     # --- Initialize session state ---
     if "selected_symbol" not in st.session_state:
-        # Default to first open trade's symbol, or first tracked symbol
+        # Default to first open trade's symbol (cheap query, already cached)
         open_trades = get_open_trades_cached()
         if open_trades:
             st.session_state["selected_symbol"] = open_trades[0]["symbol"]
         else:
-            watchlist = get_watchlist_data_cached()
-            if watchlist:
-                st.session_state["selected_symbol"] = watchlist[0]["symbol"]
-            else:
-                st.session_state["selected_symbol"] = ""
+            st.session_state["selected_symbol"] = "BTC/USDT:USDT"
 
     if "selected_timeframe" not in st.session_state:
         st.session_state["selected_timeframe"] = "1h"
@@ -97,33 +93,16 @@ def render():
 # ---------------------------------------------------------------------------
 
 def _render_watchlist_panel():
-    """Left panel — watchlist with search and clickable rows."""
+    """Left panel — watchlist with selectbox (no per-symbol DB queries)."""
     watchlist = get_watchlist_data_cached()
     selected = st.session_state.get("selected_symbol", "")
 
-    # Enrich with unrealized P&L from open trades
+    # Mark which symbols have open trades (no OHLCV queries)
     open_trades = get_open_trades_cached()
-    trade_map: dict[str, dict] = {}
-    for t in open_trades:
-        trade_map[t["symbol"]] = t
-
+    trade_symbols = {t["symbol"] for t in open_trades}
     for w in watchlist:
-        sym = w["symbol"]
-        if sym in trade_map:
-            t = trade_map[sym]
+        if w["symbol"] in trade_symbols:
             w["has_open_trade"] = True
-            # Calculate unrealized P&L using latest 1h candle
-            candles = get_ohlcv_cached(sym, "1h", 1)
-            if candles:
-                price = candles[-1]["close"]
-                entry = t["entry_price"]
-                leverage = t.get("leverage", 5.0)
-                if price and entry:
-                    if t["bias"] == "LONG":
-                        pnl = ((price - entry) / entry) * 100 * leverage
-                    else:
-                        pnl = ((entry - price) / entry) * 100 * leverage
-                    w["unrealized_pnl_pct"] = round(pnl, 2)
 
     render_watchlist(watchlist, selected)
 
@@ -531,16 +510,21 @@ def _render_open_trade_detail(trade: dict, symbol: str):
 # ---------------------------------------------------------------------------
 
 def _render_proximity_alerts_compact():
-    """Compact proximity alerts in top bar area."""
+    """Compact proximity alerts — uses entry price as proxy to avoid N OHLCV queries.
+    Real price check happens in the chart fragment for the selected symbol only."""
     open_trades = get_open_trades_cached()
     if not open_trades:
         return
 
+    # Only check proximity for the currently selected symbol (1 OHLCV query max)
+    selected = st.session_state.get("selected_symbol", "")
     alerts = []
     for t in open_trades:
         sym = t["symbol"]
-        coin = sym.replace("/USDT:USDT", "")
+        if sym != selected:
+            continue
 
+        coin = sym.replace("/USDT:USDT", "")
         candles = get_ohlcv_cached(sym, "1h", 1)
         if not candles:
             continue
@@ -610,34 +594,24 @@ def _render_bottom_panel():
 
 @st.fragment(run_every=30)
 def _render_tab_open_trades():
-    """Open trades tab with auto-refresh."""
+    """Open trades tab with auto-refresh. No per-trade OHLCV queries."""
     trades = get_open_trades_cached()
     if not trades:
         st.caption("Acik islem yok.")
         return
 
-    # Enrich with current price P&L
     rows = []
     for t in trades:
         coin = t["symbol"].replace("/USDT:USDT", "")
         entry = t["entry_price"]
-        leverage = t.get("leverage", 5.0)
         size_usd = t.get("position_size_usd") or 200
-
-        candles = get_ohlcv_cached(t["symbol"], "1h", 1)
-        price = candles[-1]["close"] if candles else 0
-        pnl_pct = 0.0
-        if price and entry:
-            if t["bias"] == "LONG":
-                pnl_pct = ((price - entry) / entry) * 100 * leverage
-            else:
-                pnl_pct = ((entry - price) / entry) * 100 * leverage
 
         rows.append({
             "Coin": coin,
             "Yon": t["bias"],
             "Giris": f"${entry:,.4f}" if entry < 1 else f"${entry:,.2f}",
-            "P&L": f"{pnl_pct:+.2f}%",
+            "MFE": f"{t.get('mfe_pct', 0):+.1f}%",
+            "MAE": f"{t.get('mae_pct', 0):+.1f}%",
             "TP": f"${t['tp_price']:,.2f}" if t.get("tp_price") else "-",
             "SL": f"${t['sl_price']:,.2f}" if t.get("sl_price") else "-",
             "Trail": f"${t['trailing_stop_price']:,.2f}" if t.get("trailing_stop_price") else "-",
