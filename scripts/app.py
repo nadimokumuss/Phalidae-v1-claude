@@ -1,8 +1,7 @@
 """
 Phalidae v2 - Self-Learning Crypto Trading Bot
 Entry point: DB init + Scheduler start + Streamlit multi-page navigation.
-Phase 4: Analysis Library page.
-Phase 5: Global CSS improvements.
+Phase 6: TradingView-style UI redesign — 3 pages.
 """
 
 import sys
@@ -24,34 +23,15 @@ logger = logging.getLogger("phalidae")
 
 # Page config must be first Streamlit call
 st.set_page_config(
-    page_title="Phalidae v2",
-    page_icon="🦋",
+    page_title="Phalidae",
+    page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
-# --- Phase 5: Global CSS ---
-st.markdown("""
-<style>
-    /* Metric card font size */
-    [data-testid="stMetricValue"] { font-size: 1.1rem; }
-
-    /* Table row hover */
-    .stDataFrame tbody tr:hover { background-color: rgba(38,166,154,0.1); }
-
-    /* Sidebar styling */
-    [data-testid="stSidebar"] { background-color: #0e1117; }
-
-    /* Divider spacing */
-    hr { margin: 0.5rem 0; }
-
-    /* Progress bar styling */
-    .stProgress > div > div { border-radius: 4px; }
-
-    /* Compact caption */
-    .stCaption { font-size: 0.8rem; }
-</style>
-""", unsafe_allow_html=True)
+# --- Global CSS (TradingView dark theme) ---
+from views.theme import get_global_css
+st.markdown(get_global_css(), unsafe_allow_html=True)
 
 
 def _init_system():
@@ -88,54 +68,21 @@ def _init_system():
 # Initialize on first load
 _init_system()
 
-# ─── Sidebar Navigation ───
-st.sidebar.title("Phalidae v2")
-st.sidebar.caption("Self-Learning Crypto Trading Bot")
-st.sidebar.divider()
-
-page = st.sidebar.radio(
-    "Sayfa",
-    ["Dashboard", "Sinyaller", "Paper Trades", "Strategy Lab", "Data Explorer", "Analiz Kutuphanesi", "TradingView"],
-    index=0,
+# ─── Horizontal Navigation (3 pages) ───
+page = st.radio(
+    "nav",
+    ["Trading Terminal", "Strategy Lab", "Data & Analytics"],
+    horizontal=True,
+    label_visibility="collapsed",
 )
 
-st.sidebar.divider()
-
-# Scheduler status — fragment for auto-refresh
-@st.fragment(run_every=60)
-def _sidebar_scheduler_status():
-    from worker.scheduler import get_scheduler_status
-    status = get_scheduler_status()
-    if status["running"]:
-        st.success("Sistem aktif")
-        for job in status["jobs"]:
-            next_run = job["next_run"][:19] if job["next_run"] else "?"
-            st.caption(f"{job['name']}: {next_run}")
-    else:
-        st.warning("Scheduler baslatiliyor...")
-
-with st.sidebar:
-    _sidebar_scheduler_status()
-
 # ─── Page Router ───
-if page == "Dashboard":
-    from views import page_dashboard
-    page_dashboard.render()
-elif page == "Sinyaller":
-    from views import page_signals
-    page_signals.render()
-elif page == "Paper Trades":
-    from views import page_paper_trades
-    page_paper_trades.render()
+if page == "Trading Terminal":
+    from views.page_terminal import render
+    render()
 elif page == "Strategy Lab":
-    from views import page_strategy_lab
-    page_strategy_lab.render()
-elif page == "Data Explorer":
-    from views import page_data_explorer
-    page_data_explorer.render()
-elif page == "Analiz Kutuphanesi":
-    from views import page_analysis_library
-    page_analysis_library.render()
-elif page == "TradingView":
-    from views import page_tradingview
-    page_tradingview.render()
+    from views.page_strategy_lab_v2 import render
+    render()
+elif page == "Data & Analytics":
+    from views.page_data_analytics import render
+    render()

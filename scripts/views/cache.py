@@ -692,6 +692,110 @@ def get_portfolio_snapshots_cached(limit: int = 5000) -> list[dict]:
 # Analysis Library (TTL=60s)
 # ---------------------------------------------------------------------------
 
+@st.cache_data(ttl=30, show_spinner=False)
+def get_watchlist_data_cached() -> list[dict]:
+    """Combined watchlist data: per-symbol
+    {symbol, regime, has_open_trade, unrealized_pnl_pct, last_signal_bias, last_signal_time}
+    TrackedSymbol + MarketRegimeRecord + PaperTrade(OPEN) + Signal join.
+    Single efficient query set."""
+    session = get_session()
+    try:
+        # Active symbols
+        symbols = (
+            session.query(TrackedSymbol)
+            .filter_by(is_active=True)
+            .order_by(TrackedSymbol.rank)
+            .all()
+        )
+        sym_list = [s.symbol for s in symbols]
+        if not sym_list:
+            return []
+
+        # Latest regime per symbol (subquery)
+        regime_subq = (
+            session.query(
+                MarketRegimeRecord.symbol,
+                func.max(MarketRegimeRecord.timestamp).label("max_ts")
+            )
+            .group_by(MarketRegimeRecord.symbol)
+            .subquery()
+        )
+        regime_rows = (
+            session.query(MarketRegimeRecord.symbol, MarketRegimeRecord.regime_label)
+            .join(regime_subq, and_(
+                MarketRegimeRecord.symbol == regime_subq.c.symbol,
+                MarketRegimeRecord.timestamp == regime_subq.c.max_ts,
+            ))
+            .all()
+        )
+        regime_map = {r.symbol: r.regime_label for r in regime_rows}
+
+        # Open trades
+        open_trades = (
+            session.query(PaperTrade)
+            .filter_by(status="OPEN")
+            .all()
+        )
+        trade_map: dict[str, dict] = {}
+        for t in open_trades:
+            trade_map[t.symbol] = {
+                "entry_price": float(t.entry_price),
+                "bias": t.bias,
+                "leverage": float(t.leverage) if t.leverage else 5.0,
+                "position_size_usd": float(t.position_size_usd) if t.position_size_usd else 200,
+            }
+
+        # Latest signal per symbol (subquery)
+        sig_subq = (
+            session.query(
+                Signal.symbol,
+                func.max(Signal.created_at).label("max_ts")
+            )
+            .group_by(Signal.symbol)
+            .subquery()
+        )
+        sig_rows = (
+            session.query(Signal.symbol, Signal.bias, Signal.created_at)
+            .join(sig_subq, and_(
+                Signal.symbol == sig_subq.c.symbol,
+                Signal.created_at == sig_subq.c.max_ts,
+            ))
+            .all()
+        )
+        sig_map = {
+            s.symbol: {
+                "bias": s.bias,
+                "time": s.created_at.strftime("%H:%M") if s.created_at else "-",
+            }
+            for s in sig_rows
+        }
+
+        # Build result
+        result = []
+        for sym in sym_list:
+            trade_info = trade_map.get(sym)
+            has_trade = trade_info is not None
+            pnl_pct = None
+
+            sig_info = sig_map.get(sym, {})
+
+            result.append({
+                "symbol": sym,
+                "regime": regime_map.get(sym, ""),
+                "has_open_trade": has_trade,
+                "unrealized_pnl_pct": pnl_pct,
+                "last_signal_bias": sig_info.get("bias"),
+                "last_signal_time": sig_info.get("time"),
+            })
+
+        return result
+    except Exception as e:
+        logger.warning(f"Watchlist data error: {e}")
+        return []
+    finally:
+        session.close()
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def get_analyses_cached(limit: int = 200) -> list[dict]:
     """ExternalAnalysis sorgusu."""
