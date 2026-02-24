@@ -155,9 +155,9 @@ These files are protected by a pre-commit hook (see [Hooks](#hooks) section). An
 |----------|-------|----------|
 | Default leverage | 5x | backtester.py, trader.py |
 | Position size | 200 USD | backtester.py, trader.py |
-| TP ATR multiplier | 3.0x (default, adaptive per variant) | backtester.py, models.py |
+| TP ATR multiplier | 2.0x (default, adaptive per variant) | backtester.py, models.py |
 | SL ATR multiplier | 1.25x (default, adaptive per variant) | backtester.py, models.py |
-| TP1 ATR multiplier | 0.48×tp_atr_mult (default 1.44x) | signal_generator.py |
+| TP1 ATR multiplier | 0.6×tp_atr_mult (default 1.2x) | signal_generator.py |
 | Warmup bars | 200 | backtester.py |
 | Min trades for scoring | 20 | optimizer.py |
 | Timeframes | 5m, 15m, 30m, 1h, 4h | collector.py |

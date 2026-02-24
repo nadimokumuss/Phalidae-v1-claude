@@ -20,7 +20,7 @@ logger = logging.getLogger("phalidae.backtester")
 DEFAULT_LEVERAGE = 5.0
 DEFAULT_POSITION_SIZE = 200.0   # USD (learning mode: smaller positions)
 WARMUP_BARS = 200
-TP_ATR_MULT = 3.0
+TP_ATR_MULT = 2.0
 SL_ATR_MULT = 1.25
 FEE_RATE = 0.0004       # Taker fee per side (%0.04)
 SLIPPAGE_RATE = 0.0002  # Estimated slippage per side (%0.02)
@@ -209,7 +209,7 @@ def backtest_variant(
         entry_threshold: Minimum average entry score for signal
         volume_required: Whether volume confirmation is needed
         custom_weights: Optional per-variant indicator weight overrides
-        tp_atr_mult: TP distance in ATR multiples (default 3.0)
+        tp_atr_mult: TP distance in ATR multiples (default 2.0)
         sl_atr_mult: SL distance in ATR multiples (default 1.25)
 
     Returns:

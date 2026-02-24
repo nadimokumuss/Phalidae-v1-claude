@@ -851,6 +851,10 @@ def check_open_trades():
                 # Record snapshot (also updates MFE/MAE)
                 record_snapshot(trade["id"], current_price)
 
+                # Fetch ATR once per trade (used by partial TP and trailing stop)
+                atr = _get_current_atr(trade["symbol"]) if trade.get("trailing_enabled") else 0
+                trade["atr"] = atr
+
                 # Time stop check
                 if trade["opened_at"]:
                     bars_held = _count_bars_since_open(trade["symbol"], trade["opened_at"])
@@ -891,13 +895,11 @@ def check_open_trades():
 
                 # Trailing stop logic
                 trailing_sl = trade["trailing_stop_price"]
-                if trade["trailing_enabled"]:
-                    atr = _get_current_atr(trade["symbol"])
-                    if atr > 0:
-                        trailing_sl = _update_trailing_stop(
-                            trade["id"], trade["bias"], trade["entry_price"],
-                            current_price, trailing_sl, atr
-                        )
+                if trade["trailing_enabled"] and atr > 0:
+                    trailing_sl = _update_trailing_stop(
+                        trade["id"], trade["bias"], trade["entry_price"],
+                        current_price, trailing_sl, atr
+                    )
 
                 # Check TP/SL/Trailing/Liquidation
                 if trade["bias"] == "LONG":
@@ -938,7 +940,7 @@ def check_open_trades():
 
 
 def _handle_partial_tp(trade: dict, current_price: float):
-    """Handle partial TP: close 50% of position, move SL to breakeven."""
+    """Handle partial TP: close 50% of position, move SL to entry + 0.25×ATR (profit buffer)."""
     from paper_trader.position import calculate_pnl
 
     session = get_session()
@@ -956,27 +958,37 @@ def _handle_partial_tp(trade: dict, current_price: float):
 
         t.partial_tp_taken = True
         t.partial_tp_pnl = pnl["pnl_usd"]
-        # Move SL to breakeven
+
+        # Move SL above breakeven with 0.25×ATR profit buffer
         old_sl = t.sl_price
-        t.sl_price = t.entry_price
-        t.trailing_stop_price = t.entry_price
+        atr = trade.get("atr", 0)
+        if atr > 0:
+            if t.bias == "LONG":
+                new_sl = t.entry_price + 0.25 * atr
+            else:
+                new_sl = t.entry_price - 0.25 * atr
+        else:
+            new_sl = t.entry_price  # fallback to breakeven if no ATR
+
+        t.sl_price = new_sl
+        t.trailing_stop_price = new_sl
         # Reduce position size by 50%
         t.position_size_usd = t.position_size_usd * 0.5
 
         session.commit()
 
         _log_trade_management(
-            trade["id"], "PARTIAL_TP", old_sl, t.entry_price,
-            f"TP1'e ulasildi, %50 kapandi (PnL: ${pnl['pnl_usd']:+.2f}), SL breakeven'a tasildi",
+            trade["id"], "PARTIAL_TP", old_sl, new_sl,
+            f"TP1'e ulasildi, %50 kapandi (PnL: ${pnl['pnl_usd']:+.2f}), SL entry+0.25ATR'a tasildi",
             current_price, pnl["pnl_percent"],
         )
         _log_trade_management(
-            trade["id"], "BE_MOVED", old_sl, t.entry_price,
-            "SL breakeven'a tasindi (partial TP sonrasi)",
+            trade["id"], "BE_MOVED", old_sl, new_sl,
+            "SL kar tamponuna tasindi (entry + 0.25×ATR)",
             current_price, pnl["pnl_percent"],
         )
 
-        logger.info(f"Partial TP: trade #{trade['id']} +${pnl['pnl_usd']:+.2f}, SL->BE")
+        logger.info(f"Partial TP: trade #{trade['id']} +${pnl['pnl_usd']:+.2f}, SL->{new_sl:.6f}")
     except Exception as e:
         session.rollback()
         logger.error(f"Partial TP error for #{trade['id']}: {e}")
@@ -1015,38 +1027,40 @@ def _update_trailing_stop(
     atr: float,
 ) -> float:
     """
-    Phase 2 improved trailing stop:
-    1.0xATR profit -> SL = entry (breakeven)
-    1.5xATR profit -> SL = entry + 0.5xATR (profit lock)
-    2.0xATR profit -> trail 1xATR behind price
+    Trailing stop tiers (optimized for tp_atr_mult=2.0):
+    0.75xATR profit -> SL = entry + 0.25xATR (profit buffer)
+    1.2xATR profit  -> SL = entry + 0.5xATR (profit lock)
+    1.5xATR profit  -> trail 0.75xATR behind price
     """
     old_trailing = current_trailing
     if bias == "LONG":
         profit = current_price - entry_price
-        if profit >= 2 * atr:
-            new_trail = current_price - atr
+        if profit >= 1.5 * atr:
+            new_trail = current_price - 0.75 * atr
             if new_trail > current_trailing:
                 current_trailing = new_trail
-        elif profit >= 1.5 * atr:
+        elif profit >= 1.2 * atr:
             target = entry_price + 0.5 * atr
             if target > current_trailing:
                 current_trailing = target
-        elif profit >= 1.0 * atr:
-            if entry_price > current_trailing:
-                current_trailing = entry_price
+        elif profit >= 0.75 * atr:
+            target = entry_price + 0.25 * atr
+            if target > current_trailing:
+                current_trailing = target
     else:  # SHORT
         profit = entry_price - current_price
-        if profit >= 2 * atr:
-            new_trail = current_price + atr
+        if profit >= 1.5 * atr:
+            new_trail = current_price + 0.75 * atr
             if new_trail < current_trailing:
                 current_trailing = new_trail
-        elif profit >= 1.5 * atr:
+        elif profit >= 1.2 * atr:
             target = entry_price - 0.5 * atr
             if target < current_trailing:
                 current_trailing = target
-        elif profit >= 1.0 * atr:
-            if entry_price < current_trailing:
-                current_trailing = entry_price
+        elif profit >= 0.75 * atr:
+            target = entry_price - 0.25 * atr
+            if target < current_trailing:
+                current_trailing = target
 
     # Persist updated trailing stop
     if current_trailing != old_trailing:
