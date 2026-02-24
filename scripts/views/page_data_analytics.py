@@ -10,8 +10,7 @@ import pandas as pd
 from datetime import datetime
 
 from db.engine import get_session
-from db.models import ExternalAnalysis, TrackedSymbol
-from worker.collector import get_ohlcv_df
+from db.models import ExternalAnalysis
 
 from views.theme import (
     BG_PRIMARY, BG_SECONDARY, BG_TERTIARY, BG_SURFACE,
@@ -25,6 +24,8 @@ from views.cache import (
     get_system_stats_cached,
     get_ohlcv_cached,
     get_analyses_cached,
+    get_ohlcv_df_cached,
+    get_pending_analyses_cached,
 )
 
 
@@ -132,7 +133,7 @@ def _render_raw_data():
     with c3:
         limit = st.number_input("Son N mum", value=100, min_value=10, max_value=2000, step=50, key="da_raw_limit")
 
-    df = get_ohlcv_df(symbol, tf, limit=limit)
+    df = get_ohlcv_df_cached(symbol, tf, limit=limit)
     if df.empty:
         st.warning("Veri bulunamadi.")
         return
@@ -431,24 +432,8 @@ def _render_library():
 
 
 def _render_pending_validation():
-    """Pending validation list."""
-    session = get_session()
-    try:
-        pending = (
-            session.query(ExternalAnalysis)
-            .filter(ExternalAnalysis.outcome == "PENDING")
-            .order_by(ExternalAnalysis.added_at.desc())
-            .all()
-        )
-        pending_data = []
-        for a in pending:
-            pending_data.append({
-                "id": a.id, "symbol": a.symbol, "bias": a.bias_claimed,
-                "target": a.target_price, "stop": a.stop_price,
-                "summary": a.summary, "author": a.author, "added_at": a.added_at,
-            })
-    finally:
-        session.close()
+    """Pending validation list (cached query)."""
+    pending_data = get_pending_analyses_cached()
 
     if not pending_data:
         st.info("Dogrulama bekleyen analiz yok.")
@@ -488,6 +473,7 @@ def _render_pending_validation():
                         a.verified_at = datetime.utcnow()
                         session.commit()
                         get_analyses_cached.clear()
+                        get_pending_analyses_cached.clear()
                         st.success("Guncellendi!")
                         st.rerun()
                 except Exception as e:

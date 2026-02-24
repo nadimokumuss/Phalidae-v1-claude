@@ -8,11 +8,7 @@ import pandas as pd
 import numpy as np
 
 from db.engine import get_session
-from db.models import (
-    StrategyVariant, StrategyPerformance, OHLCVData, MarketRegimeRecord,
-)
-from strategy.optimizer import get_top_strategies
-from sqlalchemy import func
+from db.models import StrategyVariant
 from datetime import datetime, timedelta
 
 from views.theme import (
@@ -26,6 +22,10 @@ from views.cache import (
     get_active_symbols_cached,
     get_global_leaderboard_cached,
     get_correlation_data_cached,
+    get_top_strategies_cached,
+    get_regime_distribution_cached,
+    get_candle_count_cached,
+    get_variant_performance_cached,
 )
 
 
@@ -138,7 +138,7 @@ def _render_coin_strategies():
             horizontal=True, key="sl2_regime",
         )
 
-    strategies = get_top_strategies(selected_sym, limit=20)
+    strategies = get_top_strategies_cached(selected_sym, limit=20)
 
     if not strategies:
         st.info(f"{sym_labels[sel_idx]} icin henuz backtest sonucu yok.")
@@ -227,59 +227,39 @@ def _render_comparison_chart(top5: list[dict]):
 
 
 def _render_periodic_section(symbol: str, coin_label: str):
-    """Periodic analysis: regime distribution + data depth."""
+    """Periodic analysis: regime distribution + data depth (cached queries)."""
     period = st.selectbox(
         "Donem", ["Son 30 gun", "Son 90 gun", "Son 180 gun", "Son 1 yil"],
         key="sl2_period",
     )
     period_days = {"Son 30 gun": 30, "Son 90 gun": 90, "Son 180 gun": 180, "Son 1 yil": 365}[period]
 
-    session = get_session()
-    try:
-        cutoff = datetime.utcnow() - timedelta(days=period_days)
-        regimes = (
-            session.query(
-                MarketRegimeRecord.regime_label,
-                func.count().label("cnt"),
-            )
-            .filter(
-                MarketRegimeRecord.symbol == symbol,
-                MarketRegimeRecord.timestamp >= cutoff,
-            )
-            .group_by(MarketRegimeRecord.regime_label)
-            .all()
+    regimes = get_regime_distribution_cached(symbol, period_days)
+
+    if regimes:
+        import plotly.graph_objects as go
+
+        labels = [REGIME_LABELS.get(r["regime_label"], r["regime_label"]) for r in regimes]
+        values = [r["cnt"] for r in regimes]
+        colors = [REGIME_COLORS.get(r["regime_label"], TEXT_MUTED) for r in regimes]
+
+        fig = go.Figure(data=[go.Pie(
+            labels=labels, values=values,
+            hole=0.4,
+            marker_colors=colors,
+        )])
+        fig.update_layout(
+            template="plotly_dark",
+            height=300,
+            paper_bgcolor=BG_PRIMARY,
+            plot_bgcolor=BG_PRIMARY,
+            font=dict(color=TEXT_PRIMARY, size=11),
+            margin=dict(l=20, r=20, t=20, b=20),
         )
+        st.plotly_chart(fig, use_container_width=True)
 
-        if regimes:
-            import plotly.graph_objects as go
-
-            labels = [REGIME_LABELS.get(r.regime_label, r.regime_label) for r in regimes]
-            values = [r.cnt for r in regimes]
-            colors = [REGIME_COLORS.get(r.regime_label, TEXT_MUTED) for r in regimes]
-
-            fig = go.Figure(data=[go.Pie(
-                labels=labels, values=values,
-                hole=0.4,
-                marker_colors=colors,
-            )])
-            fig.update_layout(
-                template="plotly_dark",
-                height=300,
-                paper_bgcolor=BG_PRIMARY,
-                plot_bgcolor=BG_PRIMARY,
-                font=dict(color=TEXT_PRIMARY, size=11),
-                margin=dict(l=20, r=20, t=20, b=20),
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-        candle_count = (
-            session.query(func.count(OHLCVData.id))
-            .filter_by(symbol=symbol, timeframe="4h")
-            .scalar()
-        ) or 0
-        st.caption(f"4h veri derinligi: {candle_count} mum (~{candle_count * 4 / 24:.0f} gun)")
-    finally:
-        session.close()
+    candle_count = get_candle_count_cached(symbol, "4h")
+    st.caption(f"4h veri derinligi: {candle_count} mum (~{candle_count * 4 / 24:.0f} gun)")
 
 
 # ---------------------------------------------------------------------------
@@ -342,35 +322,25 @@ def _render_variant_detail():
         f"Volume required: {v['volume_required']}"
     )
 
-    # Cross-coin performance
-    session = get_session()
-    try:
-        perfs = (
-            session.query(StrategyPerformance)
-            .filter_by(strategy_variant_id=v["id"])
-            .filter(StrategyPerformance.total_trades > 0)
-            .order_by(StrategyPerformance.composite_score.desc())
-            .all()
-        )
-    finally:
-        session.close()
+    # Cross-coin performance (cached)
+    perfs = get_variant_performance_cached(v["id"])
 
     if perfs:
         rows = []
         for p in perfs:
             rows.append({
-                "Coin": p.symbol.replace("/USDT:USDT", ""),
-                "Rank": p.rank,
-                "Skor": round(p.composite_score, 4),
-                "WR": f"{p.win_rate * 100:.1f}%",
-                "PF": round(p.profit_factor, 2),
-                "Sharpe": round(p.sharpe_ratio, 2),
-                "Max DD": f"{p.max_drawdown:.1f}%",
-                "P&L": f"{p.total_pnl_pct:+.1f}%",
-                "Trade": p.total_trades,
-                "Trend WR": f"{p.regime_trending_score * 100:.0f}%" if p.regime_trending_score else "-",
-                "Yatay WR": f"{p.regime_ranging_score * 100:.0f}%" if p.regime_ranging_score else "-",
-                "Paper WR": f"{p.paper_win_rate * 100:.1f}%" if p.paper_total and p.paper_total > 0 else "-",
+                "Coin": p["symbol"].replace("/USDT:USDT", ""),
+                "Rank": p["rank"],
+                "Skor": round(p["composite_score"], 4),
+                "WR": f"{p['win_rate'] * 100:.1f}%",
+                "PF": round(p["profit_factor"], 2),
+                "Sharpe": round(p["sharpe_ratio"], 2),
+                "Max DD": f"{p['max_drawdown']:.1f}%",
+                "P&L": f"{p['total_pnl_pct']:+.1f}%",
+                "Trade": p["total_trades"],
+                "Trend WR": f"{p['regime_trending_score'] * 100:.0f}%" if p["regime_trending_score"] else "-",
+                "Yatay WR": f"{p['regime_ranging_score'] * 100:.0f}%" if p["regime_ranging_score"] else "-",
+                "Paper WR": f"{p['paper_win_rate'] * 100:.1f}%" if p["paper_total"] and p["paper_total"] > 0 else "-",
             })
 
         df = pd.DataFrame(rows)

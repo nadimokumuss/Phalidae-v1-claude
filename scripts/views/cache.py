@@ -23,6 +23,7 @@ from db.models import (
     OHLCVData, TrackedSymbol, PaperTrade, StrategyVariant,
     StrategyPerformance, CoinConfig, Signal, FundingData,
     MarketRegimeRecord, AgentJob, CorrelationCache,
+    ExternalAnalysis,
 )
 
 logger = logging.getLogger("phalidae.cache")
@@ -162,7 +163,8 @@ def get_system_stats_cached() -> dict:
 
 @st.cache_data(ttl=45, show_spinner=False)
 def get_agent_health_cached() -> dict:
-    """Tek bulk sorgu ile tum job'larin son 3 calismasini + 24h istatistiklerini getirir."""
+    """Bulk query ile tum job'larin son calismasini + 24h istatistiklerini getirir.
+    7+4=11 sorgu yerine 2 sorgu."""
     session = get_session()
     try:
         job_names = [
@@ -170,43 +172,51 @@ def get_agent_health_cached() -> dict:
             "market_data", "symbol_refresh", "news_collector",
         ]
 
-        # Son 3 calisma — her job icin
+        # Tek sorgu: her job icin en son kaydi getir (row_number window func)
+        from sqlalchemy import desc
+        latest_jobs = (
+            session.query(AgentJob)
+            .filter(AgentJob.job_name.in_(job_names))
+            .order_by(AgentJob.job_name, AgentJob.started_at.desc())
+            .all()
+        )
+
+        # Her job icin sadece ilk (en son) kaydi al
         jobs_data = {}
-        for job_name in job_names:
-            recent = (
-                session.query(AgentJob)
-                .filter_by(job_name=job_name)
-                .order_by(AgentJob.started_at.desc())
-                .limit(3)
-                .all()
-            )
-            if recent:
-                last = recent[0]
-                jobs_data[job_name] = {
-                    "status": last.status,
-                    "started_at": last.started_at.isoformat() if last.started_at else None,
-                    "completed_at": last.completed_at.isoformat() if last.completed_at else None,
-                    "duration_sec": float(last.duration_sec) if last.duration_sec else None,
-                    "records_affected": int(last.records_affected or 0),
+        seen = set()
+        for job in latest_jobs:
+            if job.job_name not in seen:
+                seen.add(job.job_name)
+                jobs_data[job.job_name] = {
+                    "status": job.status,
+                    "started_at": job.started_at.isoformat() if job.started_at else None,
+                    "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+                    "duration_sec": float(job.duration_sec) if job.duration_sec else None,
+                    "records_affected": int(job.records_affected or 0),
                 }
-            else:
+
+        for job_name in job_names:
+            if job_name not in jobs_data:
                 jobs_data[job_name] = None
 
-        # 24h basari/hata
+        # Tek sorgu: 24h basari + hata sayisi
         last_24h = datetime.utcnow() - timedelta(hours=24)
-        success_count = session.query(func.count(AgentJob.id)).filter(
-            AgentJob.status == "SUCCESS",
-            AgentJob.started_at >= last_24h,
-        ).scalar() or 0
-        fail_count = session.query(func.count(AgentJob.id)).filter(
-            AgentJob.status == "FAILED",
-            AgentJob.started_at >= last_24h,
-        ).scalar() or 0
+        counts = (
+            session.query(
+                AgentJob.status,
+                func.count(AgentJob.id).label("cnt"),
+            )
+            .filter(AgentJob.started_at >= last_24h)
+            .filter(AgentJob.status.in_(["SUCCESS", "FAILED"]))
+            .group_by(AgentJob.status)
+            .all()
+        )
+        count_map = {r.status: int(r.cnt) for r in counts}
 
         return {
             "jobs": jobs_data,
-            "success_24h": int(success_count),
-            "fail_24h": int(fail_count),
+            "success_24h": count_map.get("SUCCESS", 0),
+            "fail_24h": count_map.get("FAILED", 0),
         }
     finally:
         session.close()
@@ -796,12 +806,179 @@ def get_watchlist_data_cached() -> list[dict]:
         session.close()
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def get_top_strategies_cached(symbol: str, limit: int = 20) -> list[dict]:
+    """Coin bazli top strateji siralamasi — cache'li."""
+    session = get_session()
+    try:
+        results = (
+            session.query(StrategyPerformance, StrategyVariant)
+            .join(StrategyVariant, StrategyPerformance.strategy_variant_id == StrategyVariant.id)
+            .filter(StrategyPerformance.symbol == symbol)
+            .filter(StrategyPerformance.composite_score > 0)
+            .order_by(StrategyPerformance.rank)
+            .limit(limit)
+            .all()
+        )
+        strategies = []
+        for perf, variant in results:
+            strategies.append({
+                "variant_id": variant.id,
+                "name": variant.name,
+                "composition": variant.composition,
+                "rank": perf.rank,
+                "composite_score": float(perf.composite_score) if perf.composite_score else 0,
+                "win_rate": float(perf.win_rate) if perf.win_rate else 0,
+                "profit_factor": float(perf.profit_factor) if perf.profit_factor else 0,
+                "sharpe_ratio": float(perf.sharpe_ratio) if perf.sharpe_ratio else 0,
+                "max_drawdown": float(perf.max_drawdown) if perf.max_drawdown else 0,
+                "total_pnl_pct": float(perf.total_pnl_pct) if perf.total_pnl_pct else 0,
+                "total_trades": int(perf.total_trades) if perf.total_trades else 0,
+                "paper_win_rate": float(perf.paper_win_rate) if perf.paper_win_rate else None,
+                "paper_pnl_pct": float(perf.paper_pnl_pct) if perf.paper_pnl_pct else None,
+                "regime_trending_score": float(perf.regime_trending_score) if perf.regime_trending_score else None,
+                "regime_ranging_score": float(perf.regime_ranging_score) if perf.regime_ranging_score else None,
+                "regime_volatile_score": float(perf.regime_volatile_score) if perf.regime_volatile_score else None,
+            })
+        return strategies
+    finally:
+        session.close()
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def get_regime_distribution_cached(symbol: str, days: int = 30) -> list[dict]:
+    """Rejim dagilimi — donemsel analiz icin cache'li."""
+    session = get_session()
+    try:
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        regimes = (
+            session.query(
+                MarketRegimeRecord.regime_label,
+                func.count().label("cnt"),
+            )
+            .filter(
+                MarketRegimeRecord.symbol == symbol,
+                MarketRegimeRecord.timestamp >= cutoff,
+            )
+            .group_by(MarketRegimeRecord.regime_label)
+            .all()
+        )
+        return [
+            {"regime_label": r.regime_label, "cnt": int(r.cnt)}
+            for r in regimes
+        ]
+    finally:
+        session.close()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_candle_count_cached(symbol: str, timeframe: str = "4h") -> int:
+    """Veri derinligi icin mum sayisi — cache'li."""
+    session = get_session()
+    try:
+        return (
+            session.query(func.count(OHLCVData.id))
+            .filter_by(symbol=symbol, timeframe=timeframe)
+            .scalar()
+        ) or 0
+    finally:
+        session.close()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_variant_performance_cached(variant_id: int) -> list[dict]:
+    """Varyant bazli cross-coin performans — cache'li."""
+    session = get_session()
+    try:
+        perfs = (
+            session.query(StrategyPerformance)
+            .filter_by(strategy_variant_id=variant_id)
+            .filter(StrategyPerformance.total_trades > 0)
+            .order_by(StrategyPerformance.composite_score.desc())
+            .all()
+        )
+        return [
+            {
+                "symbol": p.symbol,
+                "rank": p.rank,
+                "composite_score": float(p.composite_score) if p.composite_score else 0,
+                "win_rate": float(p.win_rate) if p.win_rate else 0,
+                "profit_factor": float(p.profit_factor) if p.profit_factor else 0,
+                "sharpe_ratio": float(p.sharpe_ratio) if p.sharpe_ratio else 0,
+                "max_drawdown": float(p.max_drawdown) if p.max_drawdown else 0,
+                "total_pnl_pct": float(p.total_pnl_pct) if p.total_pnl_pct else 0,
+                "total_trades": int(p.total_trades) if p.total_trades else 0,
+                "regime_trending_score": float(p.regime_trending_score) if p.regime_trending_score else None,
+                "regime_ranging_score": float(p.regime_ranging_score) if p.regime_ranging_score else None,
+                "paper_win_rate": float(p.paper_win_rate) if p.paper_win_rate else None,
+                "paper_total": int(p.paper_total) if p.paper_total else 0,
+            }
+            for p in perfs
+        ]
+    finally:
+        session.close()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_pending_analyses_cached() -> list[dict]:
+    """Dogrulama bekleyen analizler — cache'li."""
+    session = get_session()
+    try:
+        pending = (
+            session.query(ExternalAnalysis)
+            .filter(ExternalAnalysis.outcome == "PENDING")
+            .order_by(ExternalAnalysis.added_at.desc())
+            .all()
+        )
+        return [
+            {
+                "id": a.id, "symbol": a.symbol, "bias": a.bias_claimed,
+                "target": float(a.target_price) if a.target_price else None,
+                "stop": float(a.stop_price) if a.stop_price else None,
+                "summary": a.summary, "author": a.author,
+                "added_at": a.added_at.strftime("%m-%d %H:%M") if a.added_at else "-",
+            }
+            for a in pending
+        ]
+    finally:
+        session.close()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_ohlcv_df_cached(symbol: str, timeframe: str, limit: int = 500) -> pd.DataFrame:
+    """OHLCV verisini DataFrame olarak doner — cache'li."""
+    session = get_session()
+    try:
+        rows = (
+            session.query(OHLCVData)
+            .filter_by(symbol=symbol, timeframe=timeframe)
+            .order_by(OHLCVData.timestamp.desc())
+            .limit(limit)
+            .all()
+        )
+    finally:
+        session.close()
+
+    if not rows:
+        return pd.DataFrame()
+
+    data = [{
+        "timestamp": r.timestamp,
+        "open": float(r.open),
+        "high": float(r.high),
+        "low": float(r.low),
+        "close": float(r.close),
+        "volume": float(r.volume),
+    } for r in reversed(rows)]
+
+    return pd.DataFrame(data)
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def get_analyses_cached(limit: int = 200) -> list[dict]:
     """ExternalAnalysis sorgusu."""
     session = get_session()
     try:
-        from db.models import ExternalAnalysis
         analyses = (
             session.query(ExternalAnalysis)
             .order_by(ExternalAnalysis.added_at.desc())

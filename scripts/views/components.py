@@ -128,11 +128,11 @@ def render_watchlist(watchlist_data: list[dict], selected_symbol: str):
         st.session_state["selected_symbol"] = new_sym
         st.rerun()
 
-    # Show compact list below selectbox (just text, no widgets)
+    # Show compact list below selectbox — single HTML render instead of 30 st.markdown calls
     container = st.container(height=470)
     with container:
-        # Show top 30 as simple text
-        for i, w in enumerate(sorted_list[:30]):
+        html_parts = []
+        for w in sorted_list[:30]:
             clean = w.get("symbol", "").replace("/USDT:USDT", "")
             regime = w.get("regime", "")
             has_trade = w.get("has_open_trade", False)
@@ -141,16 +141,18 @@ def render_watchlist(watchlist_data: list[dict], selected_symbol: str):
             r_color = REGIME_COLORS.get(regime, TEXT_MUTED)
             bg = BG_TERTIARY if is_sel else "transparent"
             weight = "600" if is_sel else "400"
+            border = f"3px solid {ACCENT_BLUE}" if is_sel else "3px solid transparent"
             trade_dot = f' <span style="color:{ACCENT_YELLOW};">●</span>' if has_trade else ""
 
-            st.markdown(
+            html_parts.append(
                 f'<div style="padding:2px 6px;background:{bg};font-size:12px;'
-                f'color:{TEXT_PRIMARY};font-weight:{weight};border-left:'
-                f'{"3px solid " + ACCENT_BLUE if is_sel else "3px solid transparent"};">'
+                f'color:{TEXT_PRIMARY};font-weight:{weight};border-left:{border};">'
                 f'<span style="color:{r_color};font-size:8px;">●</span> {clean}{trade_dot}'
-                f'</div>',
-                unsafe_allow_html=True,
+                f'</div>'
             )
+
+        if html_parts:
+            st.markdown("".join(html_parts), unsafe_allow_html=True)
 
         if len(sorted_list) > 30:
             st.caption(f"+{len(sorted_list) - 30} daha (arama ile bulun)")
