@@ -26,7 +26,25 @@ from views.cache import (
     get_ohlcv_cached,
     get_analyses_cached,
 )
-from views.page_tradingview import _calc_ema
+
+
+def _calc_ema(ohlcv: list[dict], period: int) -> list[dict]:
+    """Compute EMA from OHLCV data. Returns list of {time, value}."""
+    if not ohlcv or len(ohlcv) < period:
+        return []
+    closes = [c["close"] for c in ohlcv]
+    multiplier = 2.0 / (period + 1)
+    ema_values = []
+    sma = sum(closes[:period]) / period
+    ema_values.append(sma)
+    for i in range(period, len(closes)):
+        ema_val = (closes[i] - ema_values[-1]) * multiplier + ema_values[-1]
+        ema_values.append(ema_val)
+    result = []
+    for i, val in enumerate(ema_values):
+        idx = period - 1 + i
+        result.append({"time": ohlcv[idx]["time"], "value": round(val, 8)})
+    return result
 
 
 def render():

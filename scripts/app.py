@@ -39,36 +39,49 @@ def _init_system():
     if st.session_state.get("_system_initialized"):
         return
 
-    # Create all DB tables
-    from db.engine import create_all
-    create_all()
-    logger.info("Database initialized")
-
-    # Generate seed strategy variants if none exist
-    from db.engine import get_session
-    from db.models import StrategyVariant
-    session = get_session()
     try:
-        count = session.query(StrategyVariant).count()
-        if count == 0:
-            from strategy.variants import generate_seed_variants
-            n = generate_seed_variants()
-            logger.info(f"Generated {n} seed strategy variants")
-    finally:
-        session.close()
+        # Create all DB tables
+        from db.engine import create_all
+        create_all()
+        logger.info("Database initialized")
 
-    # Start background scheduler
-    from worker.scheduler import start_scheduler
-    start_scheduler()
-    logger.info("Scheduler started")
+        # Generate seed strategy variants if none exist
+        from db.engine import get_session
+        from db.models import StrategyVariant
+        session = get_session()
+        try:
+            count = session.query(StrategyVariant).count()
+            if count == 0:
+                from strategy.variants import generate_seed_variants
+                n = generate_seed_variants()
+                logger.info(f"Generated {n} seed strategy variants")
+        finally:
+            session.close()
 
-    st.session_state["_system_initialized"] = True
+        # Start background scheduler
+        from worker.scheduler import start_scheduler
+        start_scheduler()
+        logger.info("Scheduler started")
+
+        st.session_state["_system_initialized"] = True
+    except Exception as e:
+        logger.error(f"System initialization failed: {e}")
+        st.error(
+            f"Sistem baslatilamadi. PostgreSQL veritabaninin calistigini "
+            f"ve DATABASE_URL'in dogru ayarlandigini kontrol edin.\n\nHata: {e}"
+        )
+        st.stop()
 
 
 # Initialize on first load
 _init_system()
 
 # ─── Horizontal Navigation (3 pages) ───
+st.markdown(
+    '<div style="font-size:13px;font-weight:700;color:#d1d4dc;padding:2px 0 4px 0;'
+    'letter-spacing:1px;">PHALIDAE</div>',
+    unsafe_allow_html=True,
+)
 page = st.radio(
     "nav",
     ["Trading Terminal", "Strategy Lab", "Data & Analytics"],

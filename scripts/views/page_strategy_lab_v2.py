@@ -84,7 +84,7 @@ def _render_leaderboard():
     df = pd.DataFrame(rows)
 
     try:
-        from st_aggrid import AgGrid, GridOptionsBuilder, JsCode
+        from st_aggrid import AgGrid, GridOptionsBuilder
 
         gb = GridOptionsBuilder.from_dataframe(df)
         gb.configure_default_column(
@@ -98,14 +98,12 @@ def _render_leaderboard():
         gb.configure_selection("single")
 
         grid_options = gb.build()
-        grid_options["theme"] = "alpine-dark"
 
         AgGrid(
             df,
             gridOptions=grid_options,
             height=500,
             fit_columns_on_grid_load=True,
-            allow_unsafe_jscode=True,
         )
     except ImportError:
         st.dataframe(df, use_container_width=True, height=500)
@@ -182,7 +180,7 @@ def _render_coin_strategies():
                                     cellStyle={"fontSize": "12px"})
         gb.configure_column("Skor", type=["numericColumn"])
         grid_options = gb.build()
-        grid_options["theme"] = "alpine-dark"
+
         AgGrid(df, gridOptions=grid_options, height=400, fit_columns_on_grid_load=True)
     except ImportError:
         st.dataframe(df, use_container_width=True, height=400)
@@ -385,7 +383,7 @@ def _render_variant_detail():
                                         cellStyle={"fontSize": "12px"})
             gb.configure_column("Skor", type=["numericColumn"])
             grid_options = gb.build()
-            grid_options["theme"] = "alpine-dark"
+    
             AgGrid(df, gridOptions=grid_options, height=400, fit_columns_on_grid_load=True)
         except ImportError:
             st.dataframe(df, use_container_width=True, height=400)

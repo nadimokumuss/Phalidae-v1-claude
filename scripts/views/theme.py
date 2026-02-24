@@ -167,8 +167,7 @@ hr {{
     border: 1px solid {BORDER_DEFAULT};
     color: {TEXT_SECONDARY};
 }}
-[data-testid="stRadio"] label[data-checked="true"],
-[data-testid="stRadio"] label:has(input:checked) {{
+[data-testid="stRadio"] label[data-checked="true"] {{
     background-color: {ACCENT_BLUE} !important;
     color: white !important;
     border-color: {ACCENT_BLUE} !important;

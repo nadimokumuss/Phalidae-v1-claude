@@ -170,24 +170,26 @@ def render_bottom_panel_trades(trades: list[dict], mode: str = "open"):
         if mode == "open":
             pnl_pct = t.get("unrealized_pnl_pct", 0)
             size = t.get("position_size_usd")
+            entry = t.get("entry_price", 0)
             rows.append({
                 "Coin": coin,
                 "Yon": bias,
-                "Giris": f"${t['entry_price']:,.4f}" if t["entry_price"] < 1 else f"${t['entry_price']:,.2f}",
+                "Giris": f"${entry:,.4f}" if entry < 1 else f"${entry:,.2f}",
                 "P&L": f"{pnl_pct:+.2f}%" if pnl_pct else "-",
-                "TP": f"${t['tp_price']:,.2f}" if t.get("tp_price") else "-",
-                "SL": f"${t['sl_price']:,.2f}" if t.get("sl_price") else "-",
-                "Trail": f"${t['trailing_stop_price']:,.2f}" if t.get("trailing_stop_price") else "-",
+                "TP": f"${t.get('tp_price', 0):,.2f}" if t.get("tp_price") else "-",
+                "SL": f"${t.get('sl_price', 0):,.2f}" if t.get("sl_price") else "-",
+                "Trail": f"${t.get('trailing_stop_price', 0):,.2f}" if t.get("trailing_stop_price") else "-",
                 "Boyut": f"${size:,.0f}" if size else "-",
                 "Rejim": REGIME_LABELS.get(t.get("regime_at_entry", ""), "-"),
                 "Acilis": t.get("opened_at", "-"),
             })
         else:
+            entry = t.get("entry_price", 0)
             rows.append({
                 "Coin": coin,
                 "Yon": bias,
                 "Sonuc": t.get("status", "-"),
-                "Giris": f"${t['entry_price']:,.2f}",
+                "Giris": f"${entry:,.2f}",
                 "Cikis": f"${t['exit_price']:,.2f}" if t.get("exit_price") else "-",
                 "P&L$": f"${t.get('pnl_usd', 0):+,.2f}",
                 "P&L%": f"{t.get('pnl_percent', 0):+.2f}%",

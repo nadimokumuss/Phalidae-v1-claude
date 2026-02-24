@@ -35,16 +35,36 @@ from views.cache import (
     get_watchlist_data_cached,
     get_agent_health_cached,
     get_system_stats_cached,
-    get_portfolio_snapshots_cached,
     get_regime_map_cached,
 )
 
-# Reuse chart-building functions from existing TradingView page
-from views.page_tradingview import (
-    _calc_ema,
-    _build_price_lines,
-    _build_markers,
-)
+# Import chart-building functions with fallbacks
+try:
+    from views.page_tradingview import _build_price_lines, _build_markers
+except ImportError:
+    def _build_price_lines(open_trades, current_price):
+        return []
+    def _build_markers(open_trades, closed_trades, ohlcv, signals=None):
+        return []
+
+
+def _calc_ema(ohlcv: list[dict], period: int) -> list[dict]:
+    """Compute EMA from OHLCV data. Returns list of {time, value}."""
+    if not ohlcv or len(ohlcv) < period:
+        return []
+    closes = [c["close"] for c in ohlcv]
+    multiplier = 2.0 / (period + 1)
+    ema_values = []
+    sma = sum(closes[:period]) / period
+    ema_values.append(sma)
+    for i in range(period, len(closes)):
+        ema_val = (closes[i] - ema_values[-1]) * multiplier + ema_values[-1]
+        ema_values.append(ema_val)
+    result = []
+    for i, val in enumerate(ema_values):
+        idx = period - 1 + i
+        result.append({"time": ohlcv[idx]["time"], "value": round(val, 8)})
+    return result
 
 
 def render():
@@ -454,7 +474,7 @@ def _render_open_trade_detail(trade: dict, symbol: str):
     )
 
     def _level_row(label: str, value: float | None, color: str = TEXT_PRIMARY):
-        if value:
+        if value is not None:
             fmt = f"${value:,.4f}" if value < 1 else f"${value:,.2f}"
             st.markdown(
                 f'<div style="display:flex;justify-content:space-between;'
@@ -535,12 +555,12 @@ def _render_proximity_alerts_compact():
         trail = t.get("trailing_stop_price") or 0
         effective_sl = trail if trail else sl
 
-        if effective_sl and effective_sl > 0:
+        if effective_sl and effective_sl > 0 and price > 0:
             sl_dist = abs(price - effective_sl) / price * 100
             if sl_dist <= 2.0:
                 alerts.append(("sl", coin, sl_dist))
 
-        if tp and tp > 0:
+        if tp and tp > 0 and price > 0:
             tp_dist = abs(tp - price) / price * 100
             if tp_dist <= 2.0:
                 alerts.append(("tp", coin, tp_dist))
@@ -612,9 +632,9 @@ def _render_tab_open_trades():
             "Giris": f"${entry:,.4f}" if entry < 1 else f"${entry:,.2f}",
             "MFE": f"{t.get('mfe_pct', 0):+.1f}%",
             "MAE": f"{t.get('mae_pct', 0):+.1f}%",
-            "TP": f"${t['tp_price']:,.2f}" if t.get("tp_price") else "-",
-            "SL": f"${t['sl_price']:,.2f}" if t.get("sl_price") else "-",
-            "Trail": f"${t['trailing_stop_price']:,.2f}" if t.get("trailing_stop_price") else "-",
+            "TP": f"${t.get('tp_price', 0):,.2f}" if t.get("tp_price") else "-",
+            "SL": f"${t.get('sl_price', 0):,.2f}" if t.get("sl_price") else "-",
+            "Trail": f"${t.get('trailing_stop_price', 0):,.2f}" if t.get("trailing_stop_price") else "-",
             "Boyut": f"${size_usd:,.0f}",
             "Rejim": REGIME_LABELS.get(t.get("regime_at_entry", ""), "-"),
             "Acilis": t.get("opened_at", "-"),
@@ -680,7 +700,7 @@ def _render_tab_system():
             continue
 
         completed_at = None
-        if job_info["completed_at"]:
+        if job_info.get("completed_at"):
             completed_at = datetime.fromisoformat(job_info["completed_at"])
 
         interval_min = JOB_INTERVALS.get(job_name, 60)
